@@ -2,74 +2,490 @@
 
 ## Metadata
 
-- run_id: `20260618T110947Z-review-backend-query-final-confirmation-73ddfda6`
+- run_id: `20260618T122234Z-analysis-ui-workbench-design-cn-3573467b`
 - status: `completed`
 - returncode: `0`
-- run_dir: `F:\autowork\.agent-work\claude\20260618T110947Z-review-backend-query-final-confirmation-73ddfda6`
+- run_dir: `F:\autowork\.agent-work\claude\20260618T122234Z-analysis-ui-workbench-design-cn-3573467b`
 - workspace_changed_by_worker: `False`
 - unsupported_required_flags: `['--max-turns']`
 
 ## Stdout
 
 ```text
-I have now reviewed all six specified files plus the adjacent `policy_decisions.py` and `enums.py` for context. Below is my final confirmation.
+I have thoroughly analyzed the codebase. Here is my comprehensive assessment:
 
 ---
 
-# Final Confirmation
+# Autowork 工作台 UI 设计建议
 
-## Blocking Findings
+## 当前 `/dashboard` 问题诊断
 
-None. The six reviewed files are free of blocking defects. All five fixes described in the delegation request are verifiably present:
-
-| Fix | Status | Evidence |
-|-----|--------|----------|
-| `_ensure_config_defaults` no longer commits/refreshes on read path | **Applied** | `workdoc_service.py:257-267` — only in-memory attribute assignment; no `self.db.commit()` or `self.db.refresh()` |
-| Defaults populated in-memory for legacy rows | **Applied** | `workdoc_service.py:258-267` — sets `ExecutionConfig()`, `TestConfig()`, `AgentConfig()`, `GitConfig()`, `ReviewConfig()` defaults when any config field is falsy |
-| Validate/approve commits default config changes in same transaction | **Applied** | `workdoc_service.py:113` loads → `_ensure_config_defaults` populates defaults → `validate()`/`approve()` change status and call `self.db.commit()` at lines 125/131/154 — the in-memory config defaults are flushed as part of that commit |
-| `PolicyGate.validate_workdoc()` uses `record=False` | **Applied** | `policy_gate.py:168-169` — delegates to `decide_workdoc_validation(workdoc, record=False)`, returns reasons only |
-| Internal record helpers default to `commit=False` | **Applied** | `workdoc_service.py:196` (`_record_policy_decision`) and `:205` (`_record_agent_execution_decision`) both have `commit: bool = False` |
-| Path IDs use `Path(ge=1)` | **Applied** | `workdocs.py:50,56,64,70`; `agent_runs.py:34,42`; `git_ops.py:36,42,51,59,64` — all integer path parameters validated with `ge=1` |
+| 问题 | 证据 (文件/行) |
+|------|----------------|
+| 三栏网格布局像 API 调试台，不是工作流引导 | `dashboard.py:38` — 纯 CSS Grid 三栏，无流程引导 |
+| 英文标签混合技术术语 (Intake/Queue/WorkDoc/Run/Audit) | `dashboard.py:77-199` — 全英文章节标题和按钮 |
+| 用户必须自己理解按钮顺序和依赖关系 | `dashboard.py:85-156` — 按钮平铺，无步骤号、无进度指示 |
+| 输入框裸露 ID、路径、命令，像 Postman | `dashboard.py:79-164` — input/textarea 直接映射 API 参数 |
+| 输出是 JSON dump，不是人类可读卡片 | `dashboard.py:165,199` — `<pre id="detailOutput">` + `<pre id="auditOutput">` |
+| 无项目选择、"从哪里开始"的首屏引导 | 整个页面无 workspace/项目概念 |
 
 ---
 
-## Non-Blocking Notes
+## 设计原则
 
-### 1. PolicyGate `decide_patch`, `decide_commit`, `decide_remote_publish` always auto-commit
-- **Severity**: Medium risk
-- **Files**: `policy_gate.py:93`, `:124`, `:157`
-- **Detail**: These three methods call `record_result()` with the default `commit=True`. If any caller invokes them inside an outer transaction managed by `GitPublisher` or `AgentRunnerService`, the inner `self.db.commit()` will commit the *entire* session prematurely, breaking atomicity of the outer operation. The `decide_workdoc_validation` and `decide_agent_execution` methods have a `record` parameter to opt out, but the patch/commit/publish methods lack this. Consider adding a `commit` parameter or having callers use `record_result` directly with `commit=False`.
-
-### 2. `decide_workdoc_validation` and `decide_agent_execution` have asymmetrical commit defaults
-- **Severity**: Low risk
-- **Files**: `policy_gate.py:21`, `:51`
-- **Detail**: Both default to `record=True`, which propagates to `record_result(commit=True)`. WorkDocService passes `record=False` and handles recording/committing itself — the correct pattern. But any future caller that uses the default `record=True` will trigger an auto-commit, which may be surprising. The asymmetry (some `decide_*` methods have a `record` gate, others don't) is a maintenance hazard.
-
-### 3. Direct SQL in API layer
-- **Severity**: Low (architectural)
-- **Files**: `agent_runs.py:21-29` (`select(AgentRun)`), `git_ops.py:22-32` (`select(GitOperation)`)
-- **Detail**: These routes compose SQLAlchemy queries directly rather than delegating to a service layer. The list endpoints in `workdocs.py` properly delegate to `WorkDocService.list_workdocs()`. Consistency would improve testability and separation of concerns. Not a functional defect.
-
-### 4. Potential race condition in `validate()` and `approve()`
-- **Severity**: Low (concurrency)
-- **File**: `workdoc_service.py:112-156`
-- **Detail**: Both methods load the WorkDoc via `get_workdoc()`, perform in-memory checks and mutations, then commit. Between the load and commit, a concurrent request could change the same WorkDoc's status. No `SELECT ... FOR UPDATE` or version column guards against lost updates. Unlikely to cause issues at current scale, but worth noting for production hardening.
-
-### 5. Redundant `getattr` in `update()` config loop
-- **Severity**: Cosmetic
-- **File**: `workdoc_service.py:176-181`
-- **Detail**: The loop over `("execution", "test", "agent", "git", "review")` calls `value = getattr(request, config_field, None)` for all fields, but for `"review"` the `update` value comes from `review_update` (computed on line 174) rather than from `value.model_dump(...)`. The `getattr` for `"review"` is only used for the `if value is not None` gate. Functionally correct, but the extra call is slightly misleading during reading.
-
-### 6. `_record` silently no-ops when `self.db is None`
-- **Severity**: Very Low (by design)
-- **File**: `policy_gate.py:211-222`
-- **Detail**: When `PolicyGate` is instantiated without a database session (`PolicyGate()`), `_record` returns a `PolicyDecisionResult` without persisting anything. `record_result` likewise skips the commit. This is relied upon by the test at `test_workflow.py:392` (`PolicyGate().validate_changed_files(...)`). Callers must be aware that `record_result` with `commit=True` is a no-op in this mode — it won't raise an error even though the caller likely expects persistence.
+1. **步骤优先，数据其次** — 用户看到的第一件事是"当前在哪一步、下一步做什么"，而不是"所有 API 都在这里"。
+2. **C 模式** — 默认视图只展示主流程节点和当前任务摘要。Debug/审计面板折叠在抽屉或次级 tab 中，一键展开。
+3. **中文工作台** — 所有界面文案使用中文。技术标识（API 路径、内部状态名）作为辅助标注或 tooltip 展示，不占据视觉 C 位。
+4. **渐进披露** — 每一步只展示当前步骤需要的输入和决策。上一步的详细证据和下一步的配置默认折叠。
+5. **Workspace 驱动** — 系统识别的是"工作区中的 Git 项目"，不是"聊天里的项目名"。项目选择器始终可见，且聊天建议与最终执行目标有明确视觉区分。
+6. **状态可见但不过载** — 每个任务一行状态摘要，关键节点用颜色/图标表达，技术细节（完整日志、diff 原始输出、策略决策 JSON）折叠在二级视图。
 
 ---
 
-## Confidence
+## 首屏布局
 
-**High.** All described fixes are present and correctly implemented. The current code paths guard against the previous bugs (read-path commits, missing defaults, unvalidated path IDs). The non-blocking notes above are architectural observations and edge-case hardening suggestions — none represent a current defect in the specified workflow paths.
+### 整体结构（桌面端 ≥1280px）
+
+```
+┌──────────────────────────────────────────────────────┐
+│  导航栏: Autowork · 工作台  │  [工作区: C:\dev\...▼] │
+├────────────┬───────────────────┬─────────────────────┤
+│ 左侧       │                   │  右侧               │
+│ 消息源     │                   │  当前任务详情       │
+│ (微信/手动)│     任务队列      │  (WorkDoc 卡片)     │
+│            │                   │                     │
+│ ──        │  ┌─────────────┐  │  ┌───────────────┐  │
+│ [手动输入]│  │ #12 修设置按钮│  │  │ 任务标题      │  │
+│ [微信轮询]│  │ 待审批 · 低  │  │  │ 摘要/标准     │  │
+│ [导入文件]│  │─────────────│  │  │ 状态流        │  │
+│            │  │ #11 修复搜索 │  │  │ 操作按钮      │  │
+│ ──        │  │ 已提交 · 低  │  │  └───────────────┘  │
+│ 工作区     │  │─────────────│  │                     │
+│ 项目列表   │  │ #10 登录页   │  │  执行日志 / Git    │
+│            │  │ 执行中 · 中  │  │  (折叠)            │
+│            │  └─────────────┘  │                     │
+├────────────┴───────────────────┴─────────────────────┤
+│  状态栏: 消息: 156  ·  任务: 12  ·  运行中: 1       │
+└──────────────────────────────────────────────────────┘
+```
+
+### 关键设计选择
+
+- **左侧固定 280px**：消息源入口 + 工作区项目树。不随内容滚动。
+- **中央弹性**：任务队列（主视图），用户 80% 时间在此。默认显示"待我处理"的任务。
+- **右侧固定 380-420px**：选中任务的详情卡片 + 操作面板。未选中时显示欢迎引导。
+
+**首屏引导**（未选中任何任务时，右侧显示）：
+
+```
+┌──────────────────────────┐
+│                          │
+│   👋 开始使用            │
+│                          │
+│   1. 配置工作区目录      │
+│      系统将扫描其中所有  │
+│      Git 项目            │
+│                          │
+│   2. 输入/导入消息       │
+│     手动输入或连接微信   │
+│                          │
+│   3. 从消息生成任务      │
+│     系统自动提取 WorkDoc │
+│                          │
+│   4. 审核并执行          │
+│     批准后 Agent 自动    │
+│     修改代码、测试、提交 │
+│                          │
+│   [配置工作区] [导入消息] │
+└──────────────────────────┘
+```
+
+---
+
+## 主流程
+
+### 流程步骤可视化（横条步骤指示器）
+
+位于任务队列上方，始终可见：
+
+```
+○ 消息接收 ──→ ○ 生成任务 ──→ ○ 审核 WorkDoc ──→ ○ Agent 执行 ──→ ○ 测试 ──→ ○ Git 提交 ──→ ○ 完成
+```
+
+当前步骤高亮，已完成步骤打勾，未来步骤置灰。点击任意步骤快速筛选队列到该状态的任务。
+
+### 每个步骤对应的页面模块
+
+| 步骤 | 中文名称 | 主要 UI 元素 | 对应的 API 操作 |
+|------|---------|-------------|----------------|
+| 1 | 消息接收 | 左侧"消息源"面板：手动输入框、微信轮询按钮、导入按钮 | POST /messages/import, POST /wechat/poll-room |
+| 2 | 生成任务 | 左侧"消息 → 创建 WorkDoc"按钮，或微信路径下的分段/候选 | POST /workdocs/from-messages, POST /segments/from-command |
+| 3 | 审核 WorkDoc | 中央任务队列选中 → 右侧 WorkDoc 详情卡片 → [审核通过] / [需补充] | POST /workdocs/{id}/validate, POST /workdocs/{id}/approve |
+| 4 | Agent 执行 | 右侧面板 → [开始执行] → 进度条 + 实时日志流 | POST /agent-runs/from-workdoc/{id} |
+| 5 | 测试 | 执行完成后自动触发（或手动）→ 右侧显示测试结果 | POST /tests/run-for-agent-run/{id} |
+| 6 | Git 提交 | 右侧 → [提交到本地分支] → 显示分支名和 commit hash | POST /git/commit-from-run/{id} |
+| 7 | 完成 | 右侧显示执行报告摘要，左侧可[发送反馈到微信] | GET /reports/workdoc/{id}/markdown |
+
+### 页面布局演进（根据当前步骤动态调整）
+
+**核心思路**：右侧详情面板根据 WorkDoc 当前状态，显示不同的操作区。
+
+- **WORKDOC_DRAFTED** → 显示编辑区 + [校验] [审批] 按钮
+- **WORKDOC_VALIDATED** → 显示只读摘要 + [审批通过，开始执行] 按钮
+- **AGENT_RUNNING** → 显示实时日志流 + 进度动画
+- **PATCH_CREATED** → 显示变更文件列表 + diff 摘要 + [运行测试] [提交到本地分支]
+- **GIT_COMMITTED** → 显示提交结果 + [查看报告] [发送反馈]
+
+---
+
+## 项目选择 / Workspace Registry
+
+### 设计思路
+
+用户会指定一个大工作区目录（如 `C:\dev\projects`），系统扫描其中所有 Git 仓库。聊天内容只作为推荐依据，不能直接决定执行目标。
+
+### UI 表现
+
+左侧面板下部：
+
+```
+┌── 工作区项目 ──────────────┐
+│ 🔍 [搜索项目...]           │
+│                            │
+│ 📁 frontend-app      ← 当前│
+│    C:\dev\frontend         │
+│    main · 3 个待处理任务   │
+│                            │
+│ 📁 backend-api             │
+│    C:\dev\backend          │
+│    main · 1 个待处理任务   │
+│                            │
+│ 📁 shared-lib              │
+│    C:\dev\shared           │
+│    develop                 │
+│                            │
+│ [+ 添加项目目录]           │
+│ [🔄 重新扫描工作区]        │
+└────────────────────────────┘
+```
+
+### 关键交互
+
+1. **工作区路径配置**：首次使用时在设置面板或顶部导航栏配置，如 `C:\dev\projects`。
+2. **自动扫描**：系统递归扫描该目录下的所有 `.git` 目录，列出项目。
+3. **手动添加**：可单独添加不在工作区内的 Git 项目路径。
+4. **项目卡片信息**：项目名、本地路径、当前分支、关联的任务数量。
+5. **聊天推荐 vs 实际选择**：
+   - 当聊天消息中提到"修 home 页面"时，系统可以推荐 `frontend-app`（高亮显示推荐标记）。
+   - 但用户必须手动确认或选择项目，聊天内容不能自动锁定执行目标。
+   - 推荐标记表现为项目名旁的小标签：`💬 聊天推荐`。
+
+### 在任务详情中的表现
+
+右侧 WorkDoc 详情卡片的项目区域：
+
+```
+┌─ 执行目标 ─────────────────────────────┐
+│                                         │
+│ 项目: frontend-app                      │
+│ 路径: C:\dev\projects\frontend          │
+│ 基准分支: main                          │
+│                                         │
+│ 💬 聊天推荐: frontend-app               │
+│    (来自消息 #42: "首页按钮没反应")      │
+│                                         │
+│ [更换项目 ▼]  (手动选择覆盖推荐)        │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 操作按钮与中文文案
+
+### 全局操作
+
+| 英文原文 | 推荐中文 | 位置 | 说明 |
+|---------|---------|------|------|
+| Import | 导入消息 | 左侧消息源面板 | 提交手动输入或文件 |
+| Poll | 轮询新消息 | 左侧微信面板 | 微信 wxauto 轮询 |
+| Refresh | 刷新列表 | 任务队列顶部 | 刷新任务列表 |
+| Settings | 设置 | 导航栏右上角 | 工作区路径、微信配置等 |
+
+### WorkDoc 生命周期操作
+
+| 英文原文 | 推荐中文 | 按钮样式 | 说明 |
+|---------|---------|---------|------|
+| Create WorkDoc | 生成工作任务 | 主按钮 (accent/绿色) | 从选中消息生成 WorkDoc |
+| Save draft | 保存草稿 | 次要按钮 | 保存编辑中的 WorkDoc |
+| Validate | 校验任务 | 主按钮 | 检查任务完整性 |
+| Approve | 批准执行 | 强调按钮 (绿色/确认色) | 批准 WorkDoc 进入执行 |
+| (reject/implicit) | 退回修改 | 警告按钮 (橙色) | 退回到草稿状态 |
+| (cancel) | 放弃任务 | 危险按钮 (红色/灰色) | 终止任务 |
+
+### 执行阶段操作
+
+| 英文原文 | 推荐中文 | 按钮样式 | 说明 |
+|---------|---------|---------|------|
+| Run agent | 开始执行 | 主按钮 (强调) | 调用 Agent 修改代码 |
+| View diff | 查看变更 | 次要按钮 | 展开 diff 面板 |
+| Run tests | 运行测试 | 主按钮 | 执行测试命令 |
+| Commit dry-run | 模拟提交 | 次要按钮 | dry-run 模式预览 |
+| Commit local | 提交到本地分支 | 强调按钮 | 本地 branch + commit |
+| Push | 推送到远程 | 次要/禁用 | Phase 2 启用 |
+| Create PR | 创建合并请求 | 次要/禁用 | Phase 2 启用 |
+
+### 报告与反馈
+
+| 英文原文 | 推荐中文 | 说明 |
+|---------|---------|------|
+| View report | 查看报告 | 打开执行报告 |
+| Send feedback | 发送反馈 | 将结果回写到微信/聊天 |
+| View logs | 查看日志 | 展开完整 stdout/stderr |
+
+### 按钮文案设计原则
+
+1. **动词短语**，4-7 个字，表意清晰。
+2. **主操作用强调色**，每屏不超过 2 个主操作。
+3. **危险操作加确认对话框**（如"放弃任务"、"真实提交"）。
+4. **禁用按钮保留位置**（如 Push），hover 时 tooltip 说明"即将推出"。
+
+---
+
+## 状态文案
+
+### 状态中文映射表
+
+| 英文状态 | 推荐中文 | 视觉颜色 | 说明 |
+|---------|---------|---------|------|
+| MESSAGE_RECEIVED | 消息已接收 | 灰色 | 初始状态 |
+| SEGMENT_CREATED | 消息已分段 | 灰色 | 微信路径中 |
+| TASK_CANDIDATE_CREATED | 候选任务 | 灰色 | 等待确认 |
+| BOT_COMMAND_LOGGED | 指令已记录 | 灰色 | Bot 命令 |
+| NEED_CLARIFICATION | 需要澄清 | 橙色 | 信息不足 |
+| READY_FOR_WORKDOC | 可生成任务 | 蓝色 | 微信路径中 |
+| CONVERTED_TO_WORKDOC | 已转为任务 | 蓝色 | 微信路径中 |
+| WORKDOC_DRAFTED | 草稿 | 灰色 | 等待校验 |
+| WORKDOC_VALIDATED | 已校验 | 蓝色 | 等待审批 |
+| WORKDOC_APPROVED | 已批准 | 绿色 | 等待执行 |
+| AGENT_RUN_CREATED | 执行已创建 | 蓝色 | 准备执行 |
+| AGENT_RUNNING | 执行中 | 蓝色动画 | Agent 工作中 |
+| PATCH_CREATED | 代码已修改 | 蓝色 | 等待测试 |
+| TEST_RUNNING | 测试中 | 蓝色动画 | 测试运行中 |
+| TEST_FAILED | 测试失败 | 红色 | 需要人工介入 |
+| TEST_PASSED | 测试通过 | 绿色 | 等待提交 |
+| GIT_COMMITTED | 已提交 | 绿色 | 本地已 commit |
+| PR_CREATED | 已创建 PR | 绿色 | Phase 2 |
+| REPORTED_BACK | 已反馈 | 绿色 | 终态 |
+| HUMAN_REVIEW_REQUIRED | 需要人工处理 | 橙色 | 阻塞状态 |
+| POLICY_BLOCKED | 策略拦截 | 红色 | 安全策略阻止 |
+| APPROVED_FOR_AGENT | 已批准执行 | 绿色 | 内部状态 |
+| APPROVED_FOR_COMMIT | 已批准提交 | 绿色 | 内部状态 |
+| TEST_TIMEOUT | 测试超时 | 红色 | 异常状态 |
+| TEST_NOT_CONFIGURED | 未配置测试 | 橙色 | 配置缺失 |
+
+### 状态展示方式
+
+**主流程（队列列表）中的状态标签**：
+
+```
+○ 草稿       (灰色圆点 + 文字)
+◉ 已校验     (蓝色圆点 + 文字)
+● 执行中 ⟳   (蓝色圆点旋转 + 文字)
+✓ 已提交     (绿色圆点 + 文字)
+⚠ 需要人工   (橙色三角 + 文字)
+✗ 策略拦截   (红色叉号 + 文字)
+```
+
+**详情面板中的状态流**——横向步骤条，当前状态高亮：
+
+```
+消息接收 ✓ → 草稿 ✓ → 已校验 ✓ → 已批准 ✓ → 执行中 ● → 测试 ○ → 提交 ○ → 完成 ○
+```
+
+---
+
+## Debug / Audit 信息
+
+### 设计原则
+
+- **默认全部折叠**，不影响主流程视觉。
+- **通过统一的"展开详情"入口访问**，而不是分散在各处。
+- **区分"日常需要看"和"只有排查问题才需要看"**。
+- **日志数据以格式化卡片展示**，不直接 dump JSON。
+
+### 分层折叠策略
+
+| 层级 | 内容 | 默认状态 | 打开方式 |
+|------|------|---------|---------|
+| L0 主视图 | 任务标题、状态、项目、上一步/下一步操作 | 始终可见 | - |
+| L1 任务上下文 | WorkDoc 完整字段（问题描述、验收标准、约束、证据消息引用） | 折叠 | 点击"展开任务详情" |
+| L2 执行证据 | Agent 命令、stdout/stderr 摘要、变更文件列表、diff 统计 | 折叠 | 点击"查看执行详情" |
+| L3 审计记录 | 完整日志、策略决策记录、Git 操作原始输出、PolicyDecision JSON | 折叠 | 点击"审计日志"（需确认或通过开发者开关） |
+
+### UI 表现
+
+右侧详情面板底部：
+
+```
+┌─ 任务详情 ──────────────────────────────┐
+│  标题: 修复首页设置按钮                  │
+│  ...                                    │
+│                                         │
+│  ▶ 展开任务详情 (问题描述/验收标准/证据) │  ← L1
+│  ▶ 查看执行详情 (命令/变更/diff)        │  ← L2
+│                                         │
+│  🔍 审计日志                            │  ← L3，小字，灰色
+│     (策略决策 · Git 操作 · 完整输出)     │
+│                                         │
+│  [复制全部日志] [导出报告]              │
+└─────────────────────────────────────────┘
+```
+
+### 审计面板（L3）
+
+点击"审计日志"后，在右侧面板下方或全屏抽屉中展开：
+
+```
+┌─ 审计日志: WorkDoc #12 ──────────────────┐
+│                                            │
+│  [策略决策] [Agent 日志] [Git 操作] [全部] │
+│                                            │
+│  ┌─ 策略决策 ────────────────────────────┐ │
+│  │ 2026-06-18 14:32:15                   │ │
+│  │ 阶段: workdoc_validation              │ │
+│  │ 决策: allow                           │ │
+│  │ 原因: acceptance_criteria 存在，      │ │
+│  │       risk_level=low 无需人工审核      │ │
+│  │                                       │ │
+│  │ 2026-06-18 14:35:01                   │ │
+│  │ 阶段: commit_decision                 │ │
+│  │ 决策: allow                           │ │
+│  │ 原因: test_passed, dry_run=false      │ │
+│  └───────────────────────────────────────┘ │
+│                                            │
+│  ┌─ Agent 执行日志 ─────────────────────┐ │
+│  │ Command: claude -p "..."              │ │
+│  │ Exit code: 0                          │ │
+│  │ Duration: 12.3s                       │ │
+│  │                                       │ │
+│  │ --- stdout ---                        │ │
+│  │ [折叠/展开完整输出]                   │ │
+│  │ --- stderr ---                        │ │
+│  │ (空)                                  │ │
+│  └───────────────────────────────────────┘ │
+│                                            │
+│  ┌─ Git 操作 ───────────────────────────┐ │
+│  │ Branch: autowork-workdoc-12           │ │
+│  │ Commit: a1b2c3d                       │ │
+│  │ Files: src/App.vue (+3/-1)            │ │
+│  │                                       │ │
+│  │ --- diff ---                          │ │
+│  │ [折叠/展开完整 diff]                  │ │
+│  └───────────────────────────────────────┘ │
+└────────────────────────────────────────────┘
+```
+
+---
+
+## 参考产品与可借鉴点
+
+### 1. Linear (linear.app)
+
+**可借鉴**：
+- 任务列表 + 右侧详情面板的左右分栏布局（与当前三栏完全不同）。
+- 状态流可视化为横向步骤条。
+- 键盘快捷键驱动效率（Cmd+K 命令面板）。
+- 项目（Team）切换器在左上角。
+
+**不要照搬**：
+- Linear 的 issue tracker 模型与 Autowork 的自动执行流不同，Autowork 有强状态机驱动，不能退化成自由拖拽的看板。
+
+### 2. GitHub Actions (工作流可视化)
+
+**可借鉴**：
+- 每个 workflow run 的步骤列表：每步有图标（✓/✗/●）+ 名称 + 耗时。
+- 点击步骤展开折叠的日志。
+- 整个 run 的状态色（绿/红/黄）在列表项左侧。
+
+**不要照搬**：
+- GitHub Actions 是事件驱动（push/PR），Autowork 是聊天消息驱动 + 人工审核节点，流程中穿插更多人工决策点。
+
+### 3. Retool / n8n（工作流编排器）
+
+**可借鉴**：
+- 节点-连线可视化展示流程进度。
+- 每个节点可点击查看输入/输出。
+- "测试运行"和"真实运行"的 dry-run 切换开关。
+
+**不要照搬**：
+- Autowork 的流程是固定的（消息→WorkDoc→Agent→Git），不需要用户拖拽编排。可视化只用于状态展示，不是流程设计。
+
+### 4. Vercel / Netlify 部署面板
+
+**可借鉴**：
+- 简洁的状态摘要卡片：项目名 + 最新部署状态 + 耗时 + commit 信息。
+- "一键重新部署"的对齐感。
+- 日志折叠在页面底部，不抢占主区域。
+
+**不要照搬**：
+- 部署平台是单向的（代码→部署），Autowork 是双向闭环（聊天→代码→聊天）。
+
+### 5. Figma / Notion（侧边栏设计）
+
+**可借鉴**：
+- 左侧可折叠的导航/工作区面板。
+- 右侧属性面板（类似 Figma 的 Design 面板）展示选中项的详细信息。
+- Notion 的 `/` 命令和模板。
+
+**不要照搬**：
+- Notion 是自由文档，Autowork 是受控工作流，不能做成自由编辑的页面。
+
+### 6. 微信开发者工具 / VS Code
+
+**可借鉴**：
+- VS Code 的底部面板（Terminal/Output/Problems）可类比 Autowork 的 Debug/审计面板。
+- 微信开发者工具的"编译/预览/上传"三步按钮区。
+
+**不要照搬**：
+- IDE 复杂度太高，Autowork 的目标用户是开发者但界面要更像工具而非 IDE。
+
+---
+
+## 推荐方案
+
+### 总体方向：逐步升级，先做"任务驱动的单页工作台"
+
+**Phase A（当前→下一版 UI）**：将现有的三栏 API 调试台改造成"中文工作台"单页应用。
+
+推荐技术选择保持轻量：
+- 继续使用 FastAPI 内嵌 HTML（`dashboard.py` 的 `HTMLResponse` 模式），不引入前端框架。
+- 或者升级为单文件 Vue 3 CDN 引入（`<script src="https://unpkg.com/vue@3/dist/vue.global.js">`），用 Vue 的响应式数据绑定代替当前的手动 DOM 操作。这可以将 `dashboard.py` 中的 200 行 JS 替换为更可维护的 Vue 组件。
+
+**Phase B（后续）**：独立前端项目（Vue 3 + 组件库），通过 API 与后端通信。
+
+### 推荐文件变更（仅建议，不应由本 worker 执行）
+
+1. **重命名 API 路由**：`/dashboard` → `/workbench`（或同时保留两个路由，`/dashboard` 重定向到 `/workbench`）。
+2. **重写 `dashboard.py` 的 HTML 模板**：从三栏 API 调试布局改为上述推荐的左-中-右工作台布局。
+3. **新增 workspace registry API**：`GET /workspace/projects` — 扫描指定目录，返回 Git 项目列表。
+4. **增强 WorkDoc API**：增加 `GET /workdocs/{id}/status-timeline` 返回状态流转时间线，供前端渲染步骤条。
+
+### 优先级排序
+
+| 优先级 | 改进项 | 用户价值 | 实现成本 |
+|--------|--------|---------|---------|
+| P0 | 首屏引导（1-2-3-4 步骤说明） | 解决"看了发晕不知道怎么开始"的核心问题 | 低（纯 HTML 文案改动） |
+| P0 | 按钮中文化 + 主次按钮视觉区分 | 降低认知负担 | 低 |
+| P1 | 左-中-右三区改为"消息源/队列/详情"工作台 | 建立清晰的信息架构 | 中 |
+| P1 | 状态中文映射 + 步骤条可视化 | 让流程进度一目了然 | 中 |
+| P2 | 项目选择器 / Workspace Registry | 聊天推荐→项目选择的完整链路 | 中高（需新的扫描 API） |
+| P2 | Debug/审计面板折叠 | C 模式：默认干净，出问题时展开 | 中 |
+| P3 | 实时日志流（Agent 执行时） | 执行过程可视化 | 高（需 WebSocket 或 SSE） |
+| P3 | 微信反馈按钮直接可用 | 闭环体验 | 中 |
+
+### 一句话总结
+
+> 把 `/dashboard` 从"API 调试台"变成"任务驱动的开发工作台"：用户看到的第一个东西是当前有几个任务、每个任务到哪一步了、下一步该点什么按钮。API 参数和 JSON 输出全部藏到折叠面板里，只给需要排查问题的人看。
 ```
 
 ## Stderr
