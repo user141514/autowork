@@ -7,6 +7,7 @@ set "BACKEND_DIR=%ROOT_DIR%agent-workflow\backend"
 
 if "%AGENT_WORKFLOW_HOST%"=="" set "AGENT_WORKFLOW_HOST=127.0.0.1"
 if "%AGENT_WORKFLOW_PORT%"=="" set "AGENT_WORKFLOW_PORT=8000"
+if "%AGENT_WORKFLOW_PORT_SEARCH_LIMIT%"=="" set "AGENT_WORKFLOW_PORT_SEARCH_LIMIT=20"
 
 echo.
 echo ==========================================
@@ -15,7 +16,7 @@ echo ==========================================
 echo Root:    %ROOT_DIR%
 echo Backend: %BACKEND_DIR%
 echo Host:    %AGENT_WORKFLOW_HOST%
-echo Port:    %AGENT_WORKFLOW_PORT%
+echo Port:    %AGENT_WORKFLOW_PORT% ^(auto-search limit: %AGENT_WORKFLOW_PORT_SEARCH_LIMIT%^)
 echo.
 
 if not exist "%BACKEND_DIR%\app\main.py" (
@@ -56,22 +57,29 @@ if errorlevel 1 (
 )
 
 echo.
-echo Checking port %AGENT_WORKFLOW_PORT%...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$port = [int]$env:AGENT_WORKFLOW_PORT; $items = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if ($items) { $items | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { Write-Output ('PID {0} {1}' -f $_, $p.ProcessName) } else { Write-Output ('PID {0}' -f $_) } }; exit 2 }"
-if errorlevel 2 (
-  echo.
-  echo [ERROR] Port %AGENT_WORKFLOW_PORT% is already in use.
-  echo         The backend may already be running.
-  echo         Dashboard: http://%AGENT_WORKFLOW_HOST%:%AGENT_WORKFLOW_PORT%/dashboard
-  echo.
-  echo To use a different port:
-  echo   set AGENT_WORKFLOW_PORT=8001
-  echo   start.bat
-  echo.
-  echo [%DATE% %TIME%] Port %AGENT_WORKFLOW_PORT% is already in use >> "%LOG_FILE%"
-  pause
-  exit /b 2
+echo Searching for an available port...
+set "START_PORT=%AGENT_WORKFLOW_PORT%"
+set "SELECTED_PORT="
+for /f "usebackq tokens=1,2 delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$start = [int]$env:AGENT_WORKFLOW_PORT; $limit = [Math]::Max(1, [int]$env:AGENT_WORKFLOW_PORT_SEARCH_LIMIT); $hostName = $env:AGENT_WORKFLOW_HOST; if ([string]::IsNullOrWhiteSpace($hostName) -or $hostName -eq 'localhost') { $address = [Net.IPAddress]::Parse('127.0.0.1') } elseif ($hostName -eq '0.0.0.0') { $address = [Net.IPAddress]::Any } else { $address = [Net.IPAddress]::Parse($hostName) }; for ($i = 0; $i -lt $limit; $i++) { $port = $start + $i; $listener = $null; try { $listener = [Net.Sockets.TcpListener]::new($address, $port); $listener.Start(); $listener.Stop(); Write-Output ('SELECTED_PORT={0}' -f $port); exit 0 } catch { if ($listener) { try { $listener.Stop() } catch {} }; Write-Output ('BUSY_PORT={0}' -f $port) } }; exit 3"`) do (
+  if "%%A"=="BUSY_PORT" echo Port %%B is busy
+  if "%%A"=="SELECTED_PORT" set "SELECTED_PORT=%%B"
 )
+if not defined SELECTED_PORT (
+  echo.
+  echo [ERROR] No available port found.
+  echo         Start port: %START_PORT%
+  echo         Search limit: %AGENT_WORKFLOW_PORT_SEARCH_LIMIT%
+  echo.
+  echo To search more ports:
+  echo   set AGENT_WORKFLOW_PORT_SEARCH_LIMIT=50
+  echo   start.bat
+  echo [%DATE% %TIME%] No available port found from %START_PORT% limit %AGENT_WORKFLOW_PORT_SEARCH_LIMIT% >> "%LOG_FILE%"
+  pause
+  exit /b 3
+)
+set "AGENT_WORKFLOW_PORT=%SELECTED_PORT%"
+echo Selected port: %AGENT_WORKFLOW_PORT%
+echo [%DATE% %TIME%] Selected port %AGENT_WORKFLOW_PORT% >> "%LOG_FILE%"
 
 echo.
 echo Checking backend dependencies...
