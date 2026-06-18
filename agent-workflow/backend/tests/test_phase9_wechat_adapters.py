@@ -1,9 +1,12 @@
 from pathlib import Path
+import importlib.util
+import sys
 
 from fastapi.testclient import TestClient
 
 from app.adapters.chat.wxauto_adapter import WxautoAdapter
 from app.config import get_settings
+from app.database import SessionLocal
 from app.main import create_app
 
 
@@ -132,6 +135,38 @@ def test_wxauto_adapter_uses_whitelist_and_maps_messages(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_wxauto_adapter_fingerprints_identical_batch_messages(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
+    get_settings.cache_clear()
+
+    class FakeWechat:
+        def ChatWith(self, room_id: str) -> None:
+            self.room_id = room_id
+
+        def GetAllMessage(self):
+            return [
+                {"sender": "Alice", "content": "@WorkBot status WD-1"},
+                {"sender": "Alice", "content": "@WorkBot status WD-1"},
+            ]
+
+    adapter = WxautoAdapter(whitelist_rooms=("dev-group",))
+    adapter._wechat = FakeWechat()
+
+    try:
+        messages = adapter.read_recent_messages("dev-group", limit=20)
+        repeated = adapter.read_recent_messages("dev-group", limit=20)
+
+        assert len(messages) == 2
+        assert messages[0].source_message_fingerprint
+        assert messages[1].source_message_fingerprint
+        assert messages[0].source_message_fingerprint != messages[1].source_message_fingerprint
+        assert [item.source_message_fingerprint for item in messages] == [
+            item.source_message_fingerprint for item in repeated
+        ]
+    finally:
+        get_settings.cache_clear()
+
+
 def test_deduplication_and_feedback_mock(tmp_path: Path) -> None:
     export_file = tmp_path / "chat.csv"
     export_file.write_text("sender,text\nAlice,@WorkBot 设置按钮应该跳转到 /settings。\n", encoding="utf-8")
@@ -174,3 +209,102 @@ def test_wechat_disabled_health_and_poll_blocked() -> None:
         db_import = client.post("/wechat/local-db/import", json={"path": "F:\\WeChat Files"})
         assert db_import.status_code == 403
         assert "not implemented" in db_import.json()["detail"]
+
+
+def test_wechat_poller_imports_messages_and_processes_workbot_commands() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            assert room_id == "dev-group"
+            assert limit == 20
+            return [
+                module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="ordinary chat"),
+                module.ChatMessageCreate(
+                    platform="personal_wechat",
+                    room_id=room_id,
+                    text="@WorkBot record task",
+                ),
+            ]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        stats = module.poll_once(FakeAdapter(), settings, db, limit=20, dry_run=False)
+
+    assert stats.room_count == 1
+    assert stats.fetched_count == 2
+    assert stats.imported_count == 2
+    assert stats.command_count == 1
+    assert stats.errors == []
+
+
+def test_wechat_poller_dry_run_does_not_write_database() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="@WorkBot record task")]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        stats = module.poll_once(FakeAdapter(), settings, db, limit=20, dry_run=True)
+
+    with TestClient(create_app()) as client:
+        messages = client.get("/messages")
+        commands = client.get("/bot/commands")
+
+    assert stats.room_count == 1
+    assert stats.fetched_count == 1
+    assert stats.imported_count == 0
+    assert stats.command_count == 0
+    assert messages.json() == []
+    assert commands.json() == []
+
+
+def test_wechat_poller_imported_count_excludes_duplicates() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="@WorkBot record task")]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        first = module.poll_once(FakeAdapter(), settings, db, limit=20, dry_run=False)
+        second = module.poll_once(FakeAdapter(), settings, db, limit=20, dry_run=False)
+
+    assert first.imported_count == 1
+    assert second.imported_count == 0
+    assert second.command_count == 0
+
+
+def test_wechat_poller_parse_args_once_sets_interval_zero() -> None:
+    module = _load_poller_module()
+
+    args = module.parse_args(["--once", "--dry-run", "--rooms", "dev-group,ops-group"])
+
+    assert args.interval == 0
+    assert args.dry_run is True
+    assert args.rooms == ["dev-group", "ops-group"]
+
+
+def test_wechat_poller_rejects_negative_limit() -> None:
+    module = _load_poller_module()
+
+    try:
+        module.parse_args(["--limit", "-5"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("negative --limit should be rejected")
+
+
+def _load_poller_module():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "poll_wechat_messages.py"
+    spec = importlib.util.spec_from_file_location("poll_wechat_messages", path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module

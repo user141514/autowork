@@ -2,490 +2,122 @@
 
 ## Metadata
 
-- run_id: `20260618T122234Z-analysis-ui-workbench-design-cn-3573467b`
+- run_id: `20260618T164134Z-review-wechat-poller-final-review-6626316f`
 - status: `completed`
 - returncode: `0`
-- run_dir: `F:\autowork\.agent-work\claude\20260618T122234Z-analysis-ui-workbench-design-cn-3573467b`
+- run_dir: `F:\autowork\.agent-work\claude\20260618T164134Z-review-wechat-poller-final-review-6626316f`
 - workspace_changed_by_worker: `False`
 - unsupported_required_flags: `['--max-turns']`
 
 ## Stdout
 
 ```text
-I have thoroughly analyzed the codebase. Here is my comprehensive assessment:
+Now I have all the information needed. Let me compile the final review.
 
 ---
 
-# Autowork 工作台 UI 设计建议
+# Poller Final Review
 
-## 当前 `/dashboard` 问题诊断
+## Blocking Findings
 
-| 问题 | 证据 (文件/行) |
-|------|----------------|
-| 三栏网格布局像 API 调试台，不是工作流引导 | `dashboard.py:38` — 纯 CSS Grid 三栏，无流程引导 |
-| 英文标签混合技术术语 (Intake/Queue/WorkDoc/Run/Audit) | `dashboard.py:77-199` — 全英文章节标题和按钮 |
-| 用户必须自己理解按钮顺序和依赖关系 | `dashboard.py:85-156` — 按钮平铺，无步骤号、无进度指示 |
-| 输入框裸露 ID、路径、命令，像 Postman | `dashboard.py:79-164` — input/textarea 直接映射 API 参数 |
-| 输出是 JSON dump，不是人类可读卡片 | `dashboard.py:165,199` — `<pre id="detailOutput">` + `<pre id="auditOutput">` |
-| 无项目选择、"从哪里开始"的首屏引导 | 整个页面无 workspace/项目概念 |
+None. Both original blocking issues are resolved:
 
----
+| Original Issue | Resolution | Evidence |
+|---|---|---|
+| Messages without timestamps re-inserted every poll (dedup failure) | `fingerprint_timestamp` set to `"no-timestamp"` when wxauto provides no `datetime`, producing a stable fingerprint across polls | `wxauto_adapter.py:127` |
+| Same sender/text duplicates in a batch not distinguished | `raw_index` (from `enumerate()`) included in both `raw_json` and the SHA-256 fingerprint | `wxauto_adapter.py:30-32`, `:139`, `:200` |
 
-## 设计原则
+The argparse hardening (`--limit` positive-int only, `--interval` non-negative-int only) is also correctly implemented in `poll_wechat_messages.py:185-196`.
 
-1. **步骤优先，数据其次** — 用户看到的第一件事是"当前在哪一步、下一步做什么"，而不是"所有 API 都在这里"。
-2. **C 模式** — 默认视图只展示主流程节点和当前任务摘要。Debug/审计面板折叠在抽屉或次级 tab 中，一键展开。
-3. **中文工作台** — 所有界面文案使用中文。技术标识（API 路径、内部状态名）作为辅助标注或 tooltip 展示，不占据视觉 C 位。
-4. **渐进披露** — 每一步只展示当前步骤需要的输入和决策。上一步的详细证据和下一步的配置默认折叠。
-5. **Workspace 驱动** — 系统识别的是"工作区中的 Git 项目"，不是"聊天里的项目名"。项目选择器始终可见，且聊天建议与最终执行目标有明确视觉区分。
-6. **状态可见但不过载** — 每个任务一行状态摘要，关键节点用颜色/图标表达，技术细节（完整日志、diff 原始输出、策略决策 JSON）折叠在二级视图。
+## Non-Blocking Notes
 
----
+### 1. **Spurious saturation warning when `AGENT_WORKFLOW_WECHAT_READ_LIMIT=0`** — Severity: Low
+**File:** `agent-workflow/backend/scripts/poll_wechat_messages.py`, line 111–112
 
-## 首屏布局
-
-### 整体结构（桌面端 ≥1280px）
-
-```
-┌──────────────────────────────────────────────────────┐
-│  导航栏: Autowork · 工作台  │  [工作区: C:\dev\...▼] │
-├────────────┬───────────────────┬─────────────────────┤
-│ 左侧       │                   │  右侧               │
-│ 消息源     │                   │  当前任务详情       │
-│ (微信/手动)│     任务队列      │  (WorkDoc 卡片)     │
-│            │                   │                     │
-│ ──        │  ┌─────────────┐  │  ┌───────────────┐  │
-│ [手动输入]│  │ #12 修设置按钮│  │  │ 任务标题      │  │
-│ [微信轮询]│  │ 待审批 · 低  │  │  │ 摘要/标准     │  │
-│ [导入文件]│  │─────────────│  │  │ 状态流        │  │
-│            │  │ #11 修复搜索 │  │  │ 操作按钮      │  │
-│ ──        │  │ 已提交 · 低  │  │  └───────────────┘  │
-│ 工作区     │  │─────────────│  │                     │
-│ 项目列表   │  │ #10 登录页   │  │  执行日志 / Git    │
-│            │  │ 执行中 · 中  │  │  (折叠)            │
-│            │  └─────────────┘  │                     │
-├────────────┴───────────────────┴─────────────────────┤
-│  状态栏: 消息: 156  ·  任务: 12  ·  运行中: 1       │
-└──────────────────────────────────────────────────────┘
+```python
+if len(messages) >= limit:
 ```
 
-### 关键设计选择
+When no `--limit` is passed and the env var is set to `0`, the expression `args.limit or settings.wechat_read_limit` evaluates to `0` (line 136). The adapter then overrides `0` to its internal default (line 101), but the poller-side saturation check at line 111 fires for every poll (since `len(messages) >= 0` is always `True`). This is a noisy-but-harmless log warning. Hard to trigger in practice because `--limit` already rejects 0, and the env-var default is `20`.
 
-- **左侧固定 280px**：消息源入口 + 工作区项目树。不随内容滚动。
-- **中央弹性**：任务队列（主视图），用户 80% 时间在此。默认显示"待我处理"的任务。
-- **右侧固定 380-420px**：选中任务的详情卡片 + 操作面板。未选中时显示欢迎引导。
+### 2. **`_load_poller_module` pollutes `sys.modules`** — Severity: Low
+**File:** `agent-workflow/backend/tests/test_phase9_wechat_adapters.py`, lines 302–310
 
-**首屏引导**（未选中任何任务时，右侧显示）：
-
-```
-┌──────────────────────────┐
-│                          │
-│   👋 开始使用            │
-│                          │
-│   1. 配置工作区目录      │
-│      系统将扫描其中所有  │
-│      Git 项目            │
-│                          │
-│   2. 输入/导入消息       │
-│     手动输入或连接微信   │
-│                          │
-│   3. 从消息生成任务      │
-│     系统自动提取 WorkDoc │
-│                          │
-│   4. 审核并执行          │
-│     批准后 Agent 自动    │
-│     修改代码、测试、提交 │
-│                          │
-│   [配置工作区] [导入消息] │
-└──────────────────────────┘
+```python
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
 ```
 
----
+The test helper permanently modifies the global module cache under the name `"poll_wechat_messages"`. If any other test or framework runs additional imports of that name, it may receive the already-loaded (and potentially stale) module. In practice, this is unlikely to cause test-ordering issues in the current suite, but it is a fragile pattern. Consider restoring `sys.modules.pop(spec.name, None)` in a `finally` block, or using a unique `spec.name` per test.
 
-## 主流程
+### 3. **Fingerprint depends on `repr()` dict-key ordering (Python ≥3.7 required)** — Severity: Low / Documentation
+**File:** `agent-workflow/backend/app/adapters/chat/wxauto_adapter.py`, line 203
 
-### 流程步骤可视化（横条步骤指示器）
-
-位于任务队列上方，始终可见：
-
-```
-○ 消息接收 ──→ ○ 生成任务 ──→ ○ 审核 WorkDoc ──→ ○ Agent 执行 ──→ ○ 测试 ──→ ○ Git 提交 ──→ ○ 完成
+```python
+repr(raw_payload),
 ```
 
-当前步骤高亮，已完成步骤打勾，未来步骤置灰。点击任意步骤快速筛选队列到该状态的任务。
+The fingerprint includes `repr(raw_payload)`. For dict payloads, `repr()` produces insertion-order output in CPython 3.7+. This is stable across runs on the same Python version, so it works correctly. However, it implicitly requires Python 3.7+ (already the case for this codebase) and assumes wxauto returns dict keys in a consistent order. Not a bug, but worth documenting as a dependency.
 
-### 每个步骤对应的页面模块
+### 4. **`.strip()` asymmetry between fingerprint and stored text** — Severity: Low / Intentional
+**File:** `agent-workflow/backend/app/adapters/chat/wxauto_adapter.py`, lines 138 vs. 196
 
-| 步骤 | 中文名称 | 主要 UI 元素 | 对应的 API 操作 |
-|------|---------|-------------|----------------|
-| 1 | 消息接收 | 左侧"消息源"面板：手动输入框、微信轮询按钮、导入按钮 | POST /messages/import, POST /wechat/poll-room |
-| 2 | 生成任务 | 左侧"消息 → 创建 WorkDoc"按钮，或微信路径下的分段/候选 | POST /workdocs/from-messages, POST /segments/from-command |
-| 3 | 审核 WorkDoc | 中央任务队列选中 → 右侧 WorkDoc 详情卡片 → [审核通过] / [需补充] | POST /workdocs/{id}/validate, POST /workdocs/{id}/approve |
-| 4 | Agent 执行 | 右侧面板 → [开始执行] → 进度条 + 实时日志流 | POST /agent-runs/from-workdoc/{id} |
-| 5 | 测试 | 执行完成后自动触发（或手动）→ 右侧显示测试结果 | POST /tests/run-for-agent-run/{id} |
-| 6 | Git 提交 | 右侧 → [提交到本地分支] → 显示分支名和 commit hash | POST /git/commit-from-run/{id} |
-| 7 | 完成 | 右侧显示执行报告摘要，左侧可[发送反馈到微信] | GET /reports/workdoc/{id}/markdown |
+| Context | Value |
+|---|---|
+| Stored in `ChatMessageCreate.text` | `str(text or "")` — preserves whitespace |
+| Used in fingerprint | `text.strip()` — collapses whitespace |
 
-### 页面布局演进（根据当前步骤动态调整）
+Two messages differing only in leading/trailing whitespace would collide in deduplication (same fingerprint) but differ in stored `text`. This appears intentional — whitespace-only variance should not produce duplicate DB rows — but it means the second message's original text is silently lost. If preserving exact text is important, consider storing the raw text while only using `.strip()` for dedup.
 
-**核心思路**：右侧详情面板根据 WorkDoc 当前状态，显示不同的操作区。
+### 5. **Redundant `@WorkBot` check in `BotCommandService`** — Severity: Trivial
+**File:** `agent-workflow/backend/app/services/bot_command_service.py`, line 68
 
-- **WORKDOC_DRAFTED** → 显示编辑区 + [校验] [审批] 按钮
-- **WORKDOC_VALIDATED** → 显示只读摘要 + [审批通过，开始执行] 按钮
-- **AGENT_RUNNING** → 显示实时日志流 + 进度动画
-- **PATCH_CREATED** → 显示变更文件列表 + diff 摘要 + [运行测试] [提交到本地分支]
-- **GIT_COMMITTED** → 显示提交结果 + [查看报告] [发送反馈]
-
----
-
-## 项目选择 / Workspace Registry
-
-### 设计思路
-
-用户会指定一个大工作区目录（如 `C:\dev\projects`），系统扫描其中所有 Git 仓库。聊天内容只作为推荐依据，不能直接决定执行目标。
-
-### UI 表现
-
-左侧面板下部：
-
-```
-┌── 工作区项目 ──────────────┐
-│ 🔍 [搜索项目...]           │
-│                            │
-│ 📁 frontend-app      ← 当前│
-│    C:\dev\frontend         │
-│    main · 3 个待处理任务   │
-│                            │
-│ 📁 backend-api             │
-│    C:\dev\backend          │
-│    main · 1 个待处理任务   │
-│                            │
-│ 📁 shared-lib              │
-│    C:\dev\shared           │
-│    develop                 │
-│                            │
-│ [+ 添加项目目录]           │
-│ [🔄 重新扫描工作区]        │
-└────────────────────────────┘
+```python
+if mention not in text:
+    return None
 ```
 
-### 关键交互
+`list_unprocessed_command_messages` (message_store.py:55–67) already filters on `ChatMessage.text.contains(mention)`. The extra check in `parse_bot_command` is defensive but harmless.
 
-1. **工作区路径配置**：首次使用时在设置面板或顶部导航栏配置，如 `C:\dev\projects`。
-2. **自动扫描**：系统递归扫描该目录下的所有 `.git` 目录，列出项目。
-3. **手动添加**：可单独添加不在工作区内的 Git 项目路径。
-4. **项目卡片信息**：项目名、本地路径、当前分支、关联的任务数量。
-5. **聊天推荐 vs 实际选择**：
-   - 当聊天消息中提到"修 home 页面"时，系统可以推荐 `frontend-app`（高亮显示推荐标记）。
-   - 但用户必须手动确认或选择项目，聊天内容不能自动锁定执行目标。
-   - 推荐标记表现为项目名旁的小标签：`💬 聊天推荐`。
+### 6. **Windows `signal.SIGTERM` is a no-op** — Severity: Trivial
+**File:** `agent-workflow/backend/scripts/poll_wechat_messages.py`, line 149
 
-### 在任务详情中的表现
-
-右侧 WorkDoc 详情卡片的项目区域：
-
-```
-┌─ 执行目标 ─────────────────────────────┐
-│                                         │
-│ 项目: frontend-app                      │
-│ 路径: C:\dev\projects\frontend          │
-│ 基准分支: main                          │
-│                                         │
-│ 💬 聊天推荐: frontend-app               │
-│    (来自消息 #42: "首页按钮没反应")      │
-│                                         │
-│ [更换项目 ▼]  (手动选择覆盖推荐)        │
-└─────────────────────────────────────────┘
+```python
+signal.signal(signal.SIGTERM, should_stop.handle)
 ```
 
----
+On Windows, `signal.SIGTERM` exists as a constant and the `signal()` call succeeds, but the OS never delivers this signal. The handler will never fire. This is harmless — the script relies on `SIGINT` (Ctrl+C) for graceful shutdown, and `--once` / `--interval 0` for single-run mode. No action needed.
 
-## 操作按钮与中文文案
+## Constraint Verification ✅
 
-### 全局操作
+| Constraint | Status | Evidence |
+|---|---|---|
+| Only whitelist groups captured | ✅ | `_ensure_allowed_room()` gate (adapter:103–107), rooms filtered from `settings.wechat_whitelist_rooms` (poller:98,137) |
+| ChatMessage saved | ✅ | `MessageStore.import_messages()` creates only `ChatMessage` rows; no WorkDoc/AgentRun/Git side effects (message_store.py:16–43) |
+| @WorkBot commands recorded | ✅ | `BotCommandService.process_new_messages()` → `process_message()` creates only `BotCommandLog` rows (bot_command_service.py:27–51, 53–60) |
+| No WorkDoc created | ✅ | Neither poller, adapter, `MessageStore`, nor `BotCommandService` touches WorkDoc tables or APIs |
+| No AgentRun created | ✅ | No agent execution path is invoked |
+| No Git operations | ✅ | No git diff/commit/push path is invoked |
+| Private chats not scanned | ✅ | Adapter only reads explicitly requested rooms; never enumerates all chats |
 
-| 英文原文 | 推荐中文 | 位置 | 说明 |
-|---------|---------|------|------|
-| Import | 导入消息 | 左侧消息源面板 | 提交手动输入或文件 |
-| Poll | 轮询新消息 | 左侧微信面板 | 微信 wxauto 轮询 |
-| Refresh | 刷新列表 | 任务队列顶部 | 刷新任务列表 |
-| Settings | 设置 | 导航栏右上角 | 工作区路径、微信配置等 |
+The Phase 9 pipeline constraint is maintained: personal WeChat messages flow through `ChatMessage → BotCommand → Segment → TaskCandidate → WorkDoc`, and the poller stops at the first two steps.
 
-### WorkDoc 生命周期操作
+## Test Coverage Summary
 
-| 英文原文 | 推荐中文 | 按钮样式 | 说明 |
-|---------|---------|---------|------|
-| Create WorkDoc | 生成工作任务 | 主按钮 (accent/绿色) | 从选中消息生成 WorkDoc |
-| Save draft | 保存草稿 | 次要按钮 | 保存编辑中的 WorkDoc |
-| Validate | 校验任务 | 主按钮 | 检查任务完整性 |
-| Approve | 批准执行 | 强调按钮 (绿色/确认色) | 批准 WorkDoc 进入执行 |
-| (reject/implicit) | 退回修改 | 警告按钮 (橙色) | 退回到草稿状态 |
-| (cancel) | 放弃任务 | 危险按钮 (红色/灰色) | 终止任务 |
+| New Test | What It Covers |
+|---|---|
+| `test_wxauto_adapter_fingerprints_identical_batch_messages` | Duplicate messages in same batch get different fingerprints; repeated polls produce identical fingerprints |
+| `test_wechat_poller_rejects_negative_limit` | argparse rejects `--limit -5` with `SystemExit(2)` |
+| `test_wechat_poller_imports_messages_and_processes_workbot_commands` | Poller end-to-end: fetch→import→BotCommand |
+| `test_wechat_poller_dry_run_does_not_write_database` | `--dry-run` writes nothing to DB |
+| `test_wechat_poller_imported_count_excludes_duplicates` | Second poll of same data imports 0 |
+| `test_wechat_poller_parse_args_once_sets_interval_zero` | `--once` forces `interval=0` |
 
-### 执行阶段操作
+All new tests cover the stated fixes. Existing tests (`30 passed` per task description) are preserved.
 
-| 英文原文 | 推荐中文 | 按钮样式 | 说明 |
-|---------|---------|---------|------|
-| Run agent | 开始执行 | 主按钮 (强调) | 调用 Agent 修改代码 |
-| View diff | 查看变更 | 次要按钮 | 展开 diff 面板 |
-| Run tests | 运行测试 | 主按钮 | 执行测试命令 |
-| Commit dry-run | 模拟提交 | 次要按钮 | dry-run 模式预览 |
-| Commit local | 提交到本地分支 | 强调按钮 | 本地 branch + commit |
-| Push | 推送到远程 | 次要/禁用 | Phase 2 启用 |
-| Create PR | 创建合并请求 | 次要/禁用 | Phase 2 启用 |
+## Confidence
 
-### 报告与反馈
-
-| 英文原文 | 推荐中文 | 说明 |
-|---------|---------|------|
-| View report | 查看报告 | 打开执行报告 |
-| Send feedback | 发送反馈 | 将结果回写到微信/聊天 |
-| View logs | 查看日志 | 展开完整 stdout/stderr |
-
-### 按钮文案设计原则
-
-1. **动词短语**，4-7 个字，表意清晰。
-2. **主操作用强调色**，每屏不超过 2 个主操作。
-3. **危险操作加确认对话框**（如"放弃任务"、"真实提交"）。
-4. **禁用按钮保留位置**（如 Push），hover 时 tooltip 说明"即将推出"。
-
----
-
-## 状态文案
-
-### 状态中文映射表
-
-| 英文状态 | 推荐中文 | 视觉颜色 | 说明 |
-|---------|---------|---------|------|
-| MESSAGE_RECEIVED | 消息已接收 | 灰色 | 初始状态 |
-| SEGMENT_CREATED | 消息已分段 | 灰色 | 微信路径中 |
-| TASK_CANDIDATE_CREATED | 候选任务 | 灰色 | 等待确认 |
-| BOT_COMMAND_LOGGED | 指令已记录 | 灰色 | Bot 命令 |
-| NEED_CLARIFICATION | 需要澄清 | 橙色 | 信息不足 |
-| READY_FOR_WORKDOC | 可生成任务 | 蓝色 | 微信路径中 |
-| CONVERTED_TO_WORKDOC | 已转为任务 | 蓝色 | 微信路径中 |
-| WORKDOC_DRAFTED | 草稿 | 灰色 | 等待校验 |
-| WORKDOC_VALIDATED | 已校验 | 蓝色 | 等待审批 |
-| WORKDOC_APPROVED | 已批准 | 绿色 | 等待执行 |
-| AGENT_RUN_CREATED | 执行已创建 | 蓝色 | 准备执行 |
-| AGENT_RUNNING | 执行中 | 蓝色动画 | Agent 工作中 |
-| PATCH_CREATED | 代码已修改 | 蓝色 | 等待测试 |
-| TEST_RUNNING | 测试中 | 蓝色动画 | 测试运行中 |
-| TEST_FAILED | 测试失败 | 红色 | 需要人工介入 |
-| TEST_PASSED | 测试通过 | 绿色 | 等待提交 |
-| GIT_COMMITTED | 已提交 | 绿色 | 本地已 commit |
-| PR_CREATED | 已创建 PR | 绿色 | Phase 2 |
-| REPORTED_BACK | 已反馈 | 绿色 | 终态 |
-| HUMAN_REVIEW_REQUIRED | 需要人工处理 | 橙色 | 阻塞状态 |
-| POLICY_BLOCKED | 策略拦截 | 红色 | 安全策略阻止 |
-| APPROVED_FOR_AGENT | 已批准执行 | 绿色 | 内部状态 |
-| APPROVED_FOR_COMMIT | 已批准提交 | 绿色 | 内部状态 |
-| TEST_TIMEOUT | 测试超时 | 红色 | 异常状态 |
-| TEST_NOT_CONFIGURED | 未配置测试 | 橙色 | 配置缺失 |
-
-### 状态展示方式
-
-**主流程（队列列表）中的状态标签**：
-
-```
-○ 草稿       (灰色圆点 + 文字)
-◉ 已校验     (蓝色圆点 + 文字)
-● 执行中 ⟳   (蓝色圆点旋转 + 文字)
-✓ 已提交     (绿色圆点 + 文字)
-⚠ 需要人工   (橙色三角 + 文字)
-✗ 策略拦截   (红色叉号 + 文字)
-```
-
-**详情面板中的状态流**——横向步骤条，当前状态高亮：
-
-```
-消息接收 ✓ → 草稿 ✓ → 已校验 ✓ → 已批准 ✓ → 执行中 ● → 测试 ○ → 提交 ○ → 完成 ○
-```
-
----
-
-## Debug / Audit 信息
-
-### 设计原则
-
-- **默认全部折叠**，不影响主流程视觉。
-- **通过统一的"展开详情"入口访问**，而不是分散在各处。
-- **区分"日常需要看"和"只有排查问题才需要看"**。
-- **日志数据以格式化卡片展示**，不直接 dump JSON。
-
-### 分层折叠策略
-
-| 层级 | 内容 | 默认状态 | 打开方式 |
-|------|------|---------|---------|
-| L0 主视图 | 任务标题、状态、项目、上一步/下一步操作 | 始终可见 | - |
-| L1 任务上下文 | WorkDoc 完整字段（问题描述、验收标准、约束、证据消息引用） | 折叠 | 点击"展开任务详情" |
-| L2 执行证据 | Agent 命令、stdout/stderr 摘要、变更文件列表、diff 统计 | 折叠 | 点击"查看执行详情" |
-| L3 审计记录 | 完整日志、策略决策记录、Git 操作原始输出、PolicyDecision JSON | 折叠 | 点击"审计日志"（需确认或通过开发者开关） |
-
-### UI 表现
-
-右侧详情面板底部：
-
-```
-┌─ 任务详情 ──────────────────────────────┐
-│  标题: 修复首页设置按钮                  │
-│  ...                                    │
-│                                         │
-│  ▶ 展开任务详情 (问题描述/验收标准/证据) │  ← L1
-│  ▶ 查看执行详情 (命令/变更/diff)        │  ← L2
-│                                         │
-│  🔍 审计日志                            │  ← L3，小字，灰色
-│     (策略决策 · Git 操作 · 完整输出)     │
-│                                         │
-│  [复制全部日志] [导出报告]              │
-└─────────────────────────────────────────┘
-```
-
-### 审计面板（L3）
-
-点击"审计日志"后，在右侧面板下方或全屏抽屉中展开：
-
-```
-┌─ 审计日志: WorkDoc #12 ──────────────────┐
-│                                            │
-│  [策略决策] [Agent 日志] [Git 操作] [全部] │
-│                                            │
-│  ┌─ 策略决策 ────────────────────────────┐ │
-│  │ 2026-06-18 14:32:15                   │ │
-│  │ 阶段: workdoc_validation              │ │
-│  │ 决策: allow                           │ │
-│  │ 原因: acceptance_criteria 存在，      │ │
-│  │       risk_level=low 无需人工审核      │ │
-│  │                                       │ │
-│  │ 2026-06-18 14:35:01                   │ │
-│  │ 阶段: commit_decision                 │ │
-│  │ 决策: allow                           │ │
-│  │ 原因: test_passed, dry_run=false      │ │
-│  └───────────────────────────────────────┘ │
-│                                            │
-│  ┌─ Agent 执行日志 ─────────────────────┐ │
-│  │ Command: claude -p "..."              │ │
-│  │ Exit code: 0                          │ │
-│  │ Duration: 12.3s                       │ │
-│  │                                       │ │
-│  │ --- stdout ---                        │ │
-│  │ [折叠/展开完整输出]                   │ │
-│  │ --- stderr ---                        │ │
-│  │ (空)                                  │ │
-│  └───────────────────────────────────────┘ │
-│                                            │
-│  ┌─ Git 操作 ───────────────────────────┐ │
-│  │ Branch: autowork-workdoc-12           │ │
-│  │ Commit: a1b2c3d                       │ │
-│  │ Files: src/App.vue (+3/-1)            │ │
-│  │                                       │ │
-│  │ --- diff ---                          │ │
-│  │ [折叠/展开完整 diff]                  │ │
-│  └───────────────────────────────────────┘ │
-└────────────────────────────────────────────┘
-```
-
----
-
-## 参考产品与可借鉴点
-
-### 1. Linear (linear.app)
-
-**可借鉴**：
-- 任务列表 + 右侧详情面板的左右分栏布局（与当前三栏完全不同）。
-- 状态流可视化为横向步骤条。
-- 键盘快捷键驱动效率（Cmd+K 命令面板）。
-- 项目（Team）切换器在左上角。
-
-**不要照搬**：
-- Linear 的 issue tracker 模型与 Autowork 的自动执行流不同，Autowork 有强状态机驱动，不能退化成自由拖拽的看板。
-
-### 2. GitHub Actions (工作流可视化)
-
-**可借鉴**：
-- 每个 workflow run 的步骤列表：每步有图标（✓/✗/●）+ 名称 + 耗时。
-- 点击步骤展开折叠的日志。
-- 整个 run 的状态色（绿/红/黄）在列表项左侧。
-
-**不要照搬**：
-- GitHub Actions 是事件驱动（push/PR），Autowork 是聊天消息驱动 + 人工审核节点，流程中穿插更多人工决策点。
-
-### 3. Retool / n8n（工作流编排器）
-
-**可借鉴**：
-- 节点-连线可视化展示流程进度。
-- 每个节点可点击查看输入/输出。
-- "测试运行"和"真实运行"的 dry-run 切换开关。
-
-**不要照搬**：
-- Autowork 的流程是固定的（消息→WorkDoc→Agent→Git），不需要用户拖拽编排。可视化只用于状态展示，不是流程设计。
-
-### 4. Vercel / Netlify 部署面板
-
-**可借鉴**：
-- 简洁的状态摘要卡片：项目名 + 最新部署状态 + 耗时 + commit 信息。
-- "一键重新部署"的对齐感。
-- 日志折叠在页面底部，不抢占主区域。
-
-**不要照搬**：
-- 部署平台是单向的（代码→部署），Autowork 是双向闭环（聊天→代码→聊天）。
-
-### 5. Figma / Notion（侧边栏设计）
-
-**可借鉴**：
-- 左侧可折叠的导航/工作区面板。
-- 右侧属性面板（类似 Figma 的 Design 面板）展示选中项的详细信息。
-- Notion 的 `/` 命令和模板。
-
-**不要照搬**：
-- Notion 是自由文档，Autowork 是受控工作流，不能做成自由编辑的页面。
-
-### 6. 微信开发者工具 / VS Code
-
-**可借鉴**：
-- VS Code 的底部面板（Terminal/Output/Problems）可类比 Autowork 的 Debug/审计面板。
-- 微信开发者工具的"编译/预览/上传"三步按钮区。
-
-**不要照搬**：
-- IDE 复杂度太高，Autowork 的目标用户是开发者但界面要更像工具而非 IDE。
-
----
-
-## 推荐方案
-
-### 总体方向：逐步升级，先做"任务驱动的单页工作台"
-
-**Phase A（当前→下一版 UI）**：将现有的三栏 API 调试台改造成"中文工作台"单页应用。
-
-推荐技术选择保持轻量：
-- 继续使用 FastAPI 内嵌 HTML（`dashboard.py` 的 `HTMLResponse` 模式），不引入前端框架。
-- 或者升级为单文件 Vue 3 CDN 引入（`<script src="https://unpkg.com/vue@3/dist/vue.global.js">`），用 Vue 的响应式数据绑定代替当前的手动 DOM 操作。这可以将 `dashboard.py` 中的 200 行 JS 替换为更可维护的 Vue 组件。
-
-**Phase B（后续）**：独立前端项目（Vue 3 + 组件库），通过 API 与后端通信。
-
-### 推荐文件变更（仅建议，不应由本 worker 执行）
-
-1. **重命名 API 路由**：`/dashboard` → `/workbench`（或同时保留两个路由，`/dashboard` 重定向到 `/workbench`）。
-2. **重写 `dashboard.py` 的 HTML 模板**：从三栏 API 调试布局改为上述推荐的左-中-右工作台布局。
-3. **新增 workspace registry API**：`GET /workspace/projects` — 扫描指定目录，返回 Git 项目列表。
-4. **增强 WorkDoc API**：增加 `GET /workdocs/{id}/status-timeline` 返回状态流转时间线，供前端渲染步骤条。
-
-### 优先级排序
-
-| 优先级 | 改进项 | 用户价值 | 实现成本 |
-|--------|--------|---------|---------|
-| P0 | 首屏引导（1-2-3-4 步骤说明） | 解决"看了发晕不知道怎么开始"的核心问题 | 低（纯 HTML 文案改动） |
-| P0 | 按钮中文化 + 主次按钮视觉区分 | 降低认知负担 | 低 |
-| P1 | 左-中-右三区改为"消息源/队列/详情"工作台 | 建立清晰的信息架构 | 中 |
-| P1 | 状态中文映射 + 步骤条可视化 | 让流程进度一目了然 | 中 |
-| P2 | 项目选择器 / Workspace Registry | 聊天推荐→项目选择的完整链路 | 中高（需新的扫描 API） |
-| P2 | Debug/审计面板折叠 | C 模式：默认干净，出问题时展开 | 中 |
-| P3 | 实时日志流（Agent 执行时） | 执行过程可视化 | 高（需 WebSocket 或 SSE） |
-| P3 | 微信反馈按钮直接可用 | 闭环体验 | 中 |
-
-### 一句话总结
-
-> 把 `/dashboard` 从"API 调试台"变成"任务驱动的开发工作台"：用户看到的第一个东西是当前有几个任务、每个任务到哪一步了、下一步该点什么按钮。API 参数和 JSON 输出全部藏到折叠面板里，只给需要排查问题的人看。
+**High.** The two blocking issues are resolved with both production code and test coverage. No new severe edge cases introduced. The architecture constraint (poller stops at ChatMessage + BotCommand, never creates WorkDoc/AgentRun/Git) is verified across all four files and their downstream service calls. The non-blocking notes above are all low-severity and do not prevent the poller from operating correctly.
 ```
 
 ## Stderr

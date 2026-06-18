@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,8 +27,9 @@ class WxautoAdapter(ChatAdapter):
         wechat = self._client()
         self._switch_to_chat(wechat, room_id)
         raw_messages = self._get_messages(wechat)
-        raw_messages = raw_messages[-limit:] if limit > 0 else raw_messages
-        return [self._to_chat_message(room_id, raw) for raw in raw_messages]
+        indexed_messages = list(enumerate(raw_messages))
+        indexed_messages = indexed_messages[-limit:] if limit > 0 else indexed_messages
+        return [self._to_chat_message(room_id, raw, raw_index) for raw_index, raw in indexed_messages]
 
     def send_message(self, room_id: str, text: str) -> None:
         if not get_settings().personal_wechat_enabled:
@@ -117,13 +119,15 @@ class WxautoAdapter(ChatAdapter):
             return list(messages or [])
         raise RuntimeError("wxauto client does not expose GetAllMessage")
 
-    def _to_chat_message(self, room_id: str, raw: Any) -> ChatMessageCreate:
+    def _to_chat_message(self, room_id: str, raw: Any, raw_index: int) -> ChatMessageCreate:
         sender = _get_attr(raw, ["sender", "Sender", "who", "name"], default="unknown")
         text = _get_attr(raw, ["content", "Content", "text", "msg"], default=str(raw))
         message_type = _get_attr(raw, ["type", "Type"], default="text")
         timestamp = _get_attr(raw, ["time", "Time", "timestamp"], default=None)
+        fingerprint_timestamp = timestamp.isoformat() if isinstance(timestamp, datetime) else "no-timestamp"
         if not isinstance(timestamp, datetime):
             timestamp = datetime.now(timezone.utc)
+        raw_payload = _safe_raw(raw)
         return ChatMessageCreate(
             platform=self.platform,
             room_id=room_id,
@@ -132,7 +136,16 @@ class WxautoAdapter(ChatAdapter):
             timestamp=timestamp,
             message_type=str(message_type),
             text=str(text or ""),
-            raw_json={"source": "wxauto", "raw": _safe_raw(raw)},
+            raw_json={"source": "wxauto", "raw_index": raw_index, "raw": raw_payload},
+            source_message_fingerprint=_wxauto_source_fingerprint(
+                room_id=room_id,
+                sender=str(sender),
+                message_type=str(message_type),
+                text=str(text or ""),
+                timestamp=fingerprint_timestamp,
+                raw_index=raw_index,
+                raw_payload=raw_payload,
+            ),
         )
 
 
@@ -164,3 +177,27 @@ def _safe_raw(raw: Any) -> Any:
     if isinstance(raw, (tuple, list)):
         return list(raw)
     return repr(raw)
+
+
+def _wxauto_source_fingerprint(
+    room_id: str,
+    sender: str,
+    message_type: str,
+    text: str,
+    timestamp: str,
+    raw_index: int,
+    raw_payload: Any,
+) -> str:
+    raw = "|".join(
+        [
+            WxautoAdapter.platform,
+            room_id,
+            sender,
+            timestamp,
+            message_type,
+            text.strip(),
+            str(raw_index),
+            repr(raw_payload),
+        ]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

@@ -1,52 +1,41 @@
 # Claude Worker Task
 
-你是外部 Claude Code CLI worker，只做只读 UI/UX 设计建议。Codex 是 supervisor。
+你是外部 Claude Code CLI worker，只做只读 final review。Codex 是 supervisor。
 
-背景：
+Codex 已根据你的 review 修复：
 
-- 项目名暂定 Autowork。
-- 核心是“微信/手动输入 -> 筛选任务 -> WorkDoc -> 人审 -> Agent 执行 -> 测试 -> 本地 Git 提交 -> 报告回写”。
-- 用户认为当前 `/dashboard` 像 API 调试台，看了发晕，不知道怎么开始自动化工作流。
-- 新方向是中文的“工作台”，不是 dashboard。
-- 用户主要是开发者/操作者，但希望保留 C 模式：默认流程清晰，Debug/Audit 信息可展开。
-- 用户会指定一个大的工作区目录，系统扫描其中所有 Git 项目；聊天内容只能辅助推荐项目，不能直接决定执行目标。
-- 第一版 `Finish Automation` 默认只做本地 branch + commit，不 push、不 PR、不 merge。
+- `--limit` 改为正整数校验，负数会被 argparse 拒绝。
+- `--interval` 改为非负整数校验。
+- `WxautoAdapter` 为 wxauto 消息生成 `source_message_fingerprint`。
+- 同一批次中同 sender/text 的重复消息用 `raw_index` 区分。
+- wxauto 没有原始时间戳时，fingerprint 使用稳定的 `no-timestamp`，避免同一可见消息每轮重复入库。
+- `raw_index` 写入 `raw_json`。
+- 新增测试覆盖重复消息 fingerprint、重复轮询稳定 fingerprint、负数 limit 拒绝。
+- 测试通过：`29 passed`。
 
-请输出一份中文 UI 设计建议，不要改文件，不要写代码。
+请 review：
 
-重点回答：
+- `agent-workflow/backend/scripts/poll_wechat_messages.py`
+- `agent-workflow/backend/app/adapters/chat/wxauto_adapter.py`
+- `agent-workflow/backend/tests/test_phase9_wechat_adapters.py`
+- `agent-workflow/backend/README.md`
 
-1. 中文工作台的信息架构。
-2. 首屏怎么让用户知道从哪里开始。
-3. “微信输入筛选 -> 项目选择 -> WorkDoc -> 执行 -> Git 输出 -> 微信反馈”的页面布局。
-4. 项目选择 / Workspace Registry 在 UI 上怎么表现。
-5. Debug / Audit 信息如何隐藏但可访问。
-6. 主要按钮中文文案。
-7. 状态名称中文化建议。
-8. 你推荐参考哪些产品的 UI 模式，但不要照搬。
+重点确认：
 
-输出格式：
+1. 两个 blocking 是否已解决。
+2. 是否引入新的边界问题。
+3. 是否仍满足“只抓取白名单群、保存 ChatMessage、记录 @WorkBot 命令，不创建 WorkDoc/AgentRun/Git”的约束。
+
+输出：
 
 ```markdown
-# Autowork 工作台 UI 设计建议
+# Poller Final Review
 
-## 设计原则
+## Blocking Findings
 
-## 首屏布局
+## Non-Blocking Notes
 
-## 主流程
-
-## 项目选择
-
-## 操作按钮与中文文案
-
-## 状态文案
-
-## Debug / Audit
-
-## 参考产品与可借鉴点
-
-## 推荐方案
+## Confidence
 ```
 
 不要编辑文件。不要提交。不要推送。

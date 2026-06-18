@@ -30,6 +30,7 @@ The backend does not let an Agent read raw chat logs and modify code directly. C
 - Git diff / branch / commit / push stub / PR stub APIs
 - Report 2.0 markdown endpoints
 - Phase 9 Personal WeChat intake through Windows WeChat Desktop UIAutomation / wxauto
+- Windows-local WeChat polling script for whitelisted groups
 - Segment and TaskCandidate pipeline before WorkDoc for personal WeChat messages
 - Manual chat export import for `.txt`, `.json`, `.csv`, `.md`
 - Local WeChat database import stub that intentionally does not bypass encryption or reverse engineer databases
@@ -173,6 +174,25 @@ Install `wxauto` only on a Windows host that already has WeChat Desktop open and
 ```bash
 python -m pip install wxauto
 ```
+
+Run the local polling script once in dry-run mode:
+
+```bash
+set AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED=true
+set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
+python scripts\poll_wechat_messages.py --once --dry-run
+```
+
+Run the local polling script continuously:
+
+```bash
+set AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED=true
+set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
+set AGENT_WORKFLOW_WECHAT_READ_LIMIT=50
+python scripts\poll_wechat_messages.py --interval 30
+```
+
+The poller reads only whitelisted groups, saves messages as `ChatMessage`, deduplicates through `MessageStore`, and records new `@WorkBot` commands as `BotCommandLog`. It does not create WorkDocs, run agents, or touch Git.
 
 Poll a whitelisted group:
 
