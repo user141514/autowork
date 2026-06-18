@@ -43,6 +43,18 @@ class WorkDocFromMessagesRequest(BaseModel):
     review: ReviewConfig | None = None
 
 
+class WorkDocFromTaskCandidateRequest(BaseModel):
+    task_candidate_id: int
+    repo_name: str = "demo-repo"
+    repo_path: str = "."
+    branch_base: str = "main"
+    execution: ExecutionConfig | None = None
+    test: TestConfig | None = None
+    agent: AgentConfig | None = None
+    git: GitConfig | None = None
+    review: ReviewConfig | None = None
+
+
 class WorkDocRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

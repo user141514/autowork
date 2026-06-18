@@ -16,6 +16,12 @@ class Settings(BaseModel):
     gagent_desktop_endpoint: str | None = Field(default=None)
     default_agent_timeout_seconds: int = Field(default=120)
     protected_branches: tuple[str, ...] = Field(default=("main", "master", "production"))
+    workbot_mention: str = Field(default="@WorkBot")
+    wechat_whitelist_rooms: tuple[str, ...] = Field(default=())
+    personal_wechat_enabled: bool = Field(default=False)
+    wechat_send_enabled: bool = Field(default=False)
+    wechat_read_limit: int = Field(default=20)
+    wechat_context_window_size: int = Field(default=8)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -38,4 +44,17 @@ def get_settings() -> Settings:
         gagent_desktop_mode=os.getenv("AGENT_WORKFLOW_GAGENT_DESKTOP_MODE", "local_ipc"),
         gagent_desktop_endpoint=os.getenv("AGENT_WORKFLOW_GAGENT_DESKTOP_ENDPOINT"),
         default_agent_timeout_seconds=int(os.getenv("AGENT_WORKFLOW_DEFAULT_AGENT_TIMEOUT_SECONDS", "120")),
+        workbot_mention=os.getenv("AGENT_WORKFLOW_WORKBOT_MENTION", "@WorkBot"),
+        wechat_whitelist_rooms=tuple(
+            item.strip()
+            for item in os.getenv(
+                "AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS",
+                os.getenv("AGENT_WORKFLOW_WECHAT_WHITELIST_ROOMS", ""),
+            ).split(",")
+            if item.strip()
+        ),
+        personal_wechat_enabled=_env_bool("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", False),
+        wechat_send_enabled=_env_bool("AGENT_WORKFLOW_WECHAT_SEND_ENABLED", False),
+        wechat_read_limit=int(os.getenv("AGENT_WORKFLOW_WECHAT_READ_LIMIT", "20")),
+        wechat_context_window_size=int(os.getenv("AGENT_WORKFLOW_WECHAT_CONTEXT_WINDOW_SIZE", "8")),
     )

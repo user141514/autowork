@@ -4,8 +4,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.enums import PolicyDecisionType, RiskLevel, WorkflowStatus
+from app.models.task_candidate import TaskCandidate
 from app.models.workdoc import WorkDoc
-from app.schemas.workdoc import AgentConfig, ExecutionConfig, GitConfig, ReviewConfig, TestConfig, WorkDocFromMessagesRequest
+from app.schemas.workdoc import (
+    AgentConfig,
+    ExecutionConfig,
+    GitConfig,
+    ReviewConfig,
+    TestConfig,
+    WorkDocFromMessagesRequest,
+    WorkDocFromTaskCandidateRequest,
+)
 from app.services.errors import InvalidStateError, NotFoundError
 from app.services.message_store import MessageStore
 from app.services.policy_gate import PolicyGate
@@ -23,40 +32,41 @@ class WorkDocService:
             missing = [message_id for message_id in request.message_ids if message_id not in found_ids]
             raise NotFoundError(f"messages not found: {missing}")
 
-        combined_text = "\n".join(message.text for message in messages).strip()
-        title = _make_title(combined_text)
-        acceptance_criteria = _extract_acceptance_criteria(combined_text)
-        risk_level = _infer_risk_level(combined_text)
-        review = request.review or ReviewConfig(risk_level=risk_level)
-        execution = request.execution or ExecutionConfig()
-        test = request.test or _infer_test_config(combined_text)
-        agent = request.agent or AgentConfig()
-        git = request.git or GitConfig()
+        if any(message.platform == "personal_wechat" for message in messages):
+            raise InvalidStateError("personal WeChat messages must enter WorkDoc flow through Segment and TaskCandidate")
 
-        workdoc = WorkDoc(
-            title=title,
+        return self._create_workdoc(
+            text="\n".join(message.text for message in messages).strip(),
+            evidence_message_ids=request.message_ids,
             repo_name=request.repo_name,
             repo_path=request.repo_path,
             branch_base=request.branch_base,
-            problem_summary=combined_text or "No message text provided.",
-            observed_behavior=_extract_observed_behavior(combined_text),
-            expected_behavior=_extract_expected_behavior(combined_text),
-            constraints=_extract_constraints(combined_text),
-            acceptance_criteria=acceptance_criteria,
-            evidence_message_ids=request.message_ids,
-            uncertainties=[] if acceptance_criteria else ["acceptance criteria could not be inferred"],
-            execution=execution.model_dump(),
-            test=test.model_dump(),
-            agent=agent.model_dump(),
-            git=git.model_dump(),
-            review=review.model_dump(),
-            risk_level=review.risk_level,
-            status=WorkflowStatus.WORKDOC_DRAFTED.value,
+            execution=request.execution,
+            test=request.test,
+            agent=request.agent,
+            git=request.git,
+            review=request.review,
         )
-        self.db.add(workdoc)
-        self.db.commit()
-        self.db.refresh(workdoc)
-        return workdoc
+
+    def create_from_task_candidate(self, request: WorkDocFromTaskCandidateRequest) -> WorkDoc:
+        candidate = self.db.get(TaskCandidate, request.task_candidate_id)
+        if candidate is None:
+            raise NotFoundError(f"task candidate not found: {request.task_candidate_id}")
+        if candidate.status != WorkflowStatus.READY_FOR_WORKDOC.value:
+            raise InvalidStateError("TaskCandidate must be READY_FOR_WORKDOC before conversion")
+        return self._create_workdoc(
+            text=candidate.command_text,
+            evidence_message_ids=candidate.evidence_message_ids,
+            repo_name=request.repo_name,
+            repo_path=candidate.repo_path or request.repo_path,
+            branch_base=request.branch_base,
+            execution=request.execution,
+            test=request.test or TestConfig(),
+            agent=request.agent,
+            git=request.git,
+            review=request.review,
+            explicit_acceptance_criteria=candidate.acceptance_criteria,
+        )
 
     def list_workdocs(self) -> list[WorkDoc]:
         return list(self.db.scalars(select(WorkDoc).order_by(WorkDoc.id.asc())))
@@ -110,6 +120,49 @@ class WorkDocService:
         self.db.refresh(workdoc)
         return workdoc
 
+    def _create_workdoc(
+        self,
+        text: str,
+        evidence_message_ids: list[int],
+        repo_name: str,
+        repo_path: str,
+        branch_base: str,
+        execution: ExecutionConfig | None,
+        test: TestConfig | None,
+        agent: AgentConfig | None,
+        git: GitConfig | None,
+        review: ReviewConfig | None,
+        explicit_acceptance_criteria: list[str] | None = None,
+    ) -> WorkDoc:
+        combined_text = text.strip()
+        acceptance_criteria = explicit_acceptance_criteria or _extract_acceptance_criteria(combined_text)
+        risk_level = _infer_risk_level(combined_text)
+        review_config = review or ReviewConfig(risk_level=risk_level)
+        workdoc = WorkDoc(
+            title=_make_title(combined_text),
+            repo_name=repo_name,
+            repo_path=repo_path,
+            branch_base=branch_base,
+            problem_summary=combined_text or "No message text provided.",
+            observed_behavior=_extract_observed_behavior(combined_text),
+            expected_behavior=_extract_expected_behavior(combined_text),
+            constraints=_extract_constraints(combined_text),
+            acceptance_criteria=acceptance_criteria,
+            evidence_message_ids=evidence_message_ids,
+            uncertainties=[] if acceptance_criteria else ["acceptance criteria could not be inferred"],
+            execution=(execution or ExecutionConfig()).model_dump(),
+            test=(test or _infer_test_config(combined_text)).model_dump(),
+            agent=(agent or AgentConfig()).model_dump(),
+            git=(git or GitConfig()).model_dump(),
+            review=review_config.model_dump(),
+            risk_level=review_config.risk_level,
+            status=WorkflowStatus.WORKDOC_DRAFTED.value,
+        )
+        self.db.add(workdoc)
+        self.db.commit()
+        self.db.refresh(workdoc)
+        return workdoc
+
     def _ensure_config_defaults(self, workdoc: WorkDoc) -> None:
         changed = False
         if not workdoc.execution:
@@ -138,7 +191,8 @@ def _make_title(text: str) -> str:
 
 
 def _extract_observed_behavior(text: str) -> str | None:
-    if any(token in text.lower() for token in ["no response", "broken", "does not", "failed"]):
+    lowered = text.lower()
+    if any(token in lowered for token in ["no response", "broken", "does not", "failed"]):
         return text
     if any(token in text for token in ["没反应", "失败", "错误", "坏了"]):
         return text
@@ -146,8 +200,10 @@ def _extract_observed_behavior(text: str) -> str | None:
 
 
 def _extract_expected_behavior(text: str) -> str | None:
-    markers = ["should", "expected", "应该", "需要", "跳转"]
-    if any(marker in text.lower() for marker in markers[:2]) or any(marker in text for marker in markers[2:]):
+    lowered = text.lower()
+    if any(token in lowered for token in ["should", "expected"]) or any(
+        token in text for token in ["应该", "需要", "跳转"]
+    ):
         return text
     return None
 

@@ -53,6 +53,15 @@ def _ensure_sqlite_compat_columns() -> None:
         return
 
     table_columns = {
+        "chat_messages": {
+            "source_message_fingerprint": "VARCHAR(128)",
+        },
+        "task_candidates": {
+            "repo_path": "VARCHAR(1024)",
+            "acceptance_criteria": "JSON DEFAULT '[]'",
+            "missing_fields": "JSON DEFAULT '[]'",
+            "workdoc_id": "INTEGER",
+        },
         "workdocs": {
             "execution": "JSON DEFAULT '{}'",
             "test": "JSON DEFAULT '{}'",

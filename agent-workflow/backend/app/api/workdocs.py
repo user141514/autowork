@@ -2,8 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.workdoc import WorkDocFromMessagesRequest, WorkDocRead, WorkDocValidationResult
+from app.schemas.workdoc import (
+    WorkDocFromMessagesRequest,
+    WorkDocFromTaskCandidateRequest,
+    WorkDocRead,
+    WorkDocValidationResult,
+)
 from app.services.workdoc_service import WorkDocService
+from app.services.task_candidate_service import TaskCandidateService
 
 
 router = APIRouter(prefix="/workdocs", tags=["workdocs"])
@@ -12,6 +18,13 @@ router = APIRouter(prefix="/workdocs", tags=["workdocs"])
 @router.post("/from-messages", response_model=WorkDocRead)
 def create_workdoc_from_messages(request: WorkDocFromMessagesRequest, db: Session = Depends(get_db)):
     return WorkDocService(db).create_from_messages(request)
+
+
+@router.post("/from-task-candidate", response_model=WorkDocRead)
+def create_workdoc_from_task_candidate(request: WorkDocFromTaskCandidateRequest, db: Session = Depends(get_db)):
+    workdoc = WorkDocService(db).create_from_task_candidate(request)
+    TaskCandidateService(db).mark_converted(request.task_candidate_id, workdoc.id)
+    return workdoc
 
 
 @router.get("", response_model=list[WorkDocRead])

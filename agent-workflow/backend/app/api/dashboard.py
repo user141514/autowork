@@ -37,7 +37,7 @@ def dashboard() -> str:
 <body>
   <header>
     <h1>Agent Workflow</h1>
-    <span class="muted">Phase 8 production-chain console</span>
+    <span class="muted">Phase 9 intake and execution console</span>
   </header>
   <main>
     <section>
@@ -52,6 +52,39 @@ def dashboard() -> str:
       <button onclick="createWorkDoc()">Create WorkDoc</button>
       <button class="secondary" onclick="loadWorkDocs()">Refresh WorkDocs</button>
       <pre id="inputOutput"></pre>
+      <h2>WeChat Intake</h2>
+      <label>Room ID</label>
+      <input id="wechatRoom" value="dev-group">
+      <label>Manual export file path</label>
+      <input id="exportPath" placeholder="F:\\path\\chat.txt">
+      <label>Command Message ID</label>
+      <input id="commandMessageId">
+      <label>Context window</label>
+      <input id="contextWindow" value="8">
+      <button onclick="wechatHealth()">Health</button>
+      <button onclick="pollRoom()">Poll Room</button>
+      <button onclick="manualExportImport()">Import Export</button>
+      <button onclick="processNewCommands()">Process Commands</button>
+      <button class="secondary" onclick="loadMessages()">ChatMessages</button>
+      <button class="secondary" onclick="loadCommandLogs()">Command Logs</button>
+      <pre id="wechatOutput"></pre>
+      <h2>Segments / Candidates</h2>
+      <label>Segment ID</label>
+      <input id="segmentId">
+      <label>TaskCandidate ID</label>
+      <input id="candidateId">
+      <label>Candidate repo path</label>
+      <input id="candidateRepoPath" value=".">
+      <label>Acceptance criteria, one per line</label>
+      <textarea id="candidateCriteria">Change satisfies the WorkBot request.</textarea>
+      <button onclick="createSegmentFromCommand()">Segment From Command</button>
+      <button onclick="createCandidate()">Create Candidate</button>
+      <button onclick="updateCandidate()">Update Candidate</button>
+      <button onclick="convertCandidate()">Convert To WorkDoc</button>
+      <button onclick="sendCandidateFeedback()">Mock Feedback</button>
+      <button class="secondary" onclick="loadSegments()">Segments</button>
+      <button class="secondary" onclick="loadCandidates()">Candidates</button>
+      <pre id="candidateOutput"></pre>
       <h2>WorkDocs</h2>
       <div id="workdocList"></div>
     </section>
@@ -106,6 +139,77 @@ def dashboard() -> str:
     }
     async function post(url, body) {
       return await request(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    }
+    async function wechatHealth() {
+      show('wechatOutput', (await request('/wechat/health')).data);
+    }
+    async function pollRoom() {
+      const room = document.getElementById('wechatRoom').value;
+      const result = await post('/wechat/poll-room', { room_id: room });
+      if (result.ok && result.data.messages && result.data.messages[0]) {
+        document.getElementById('commandMessageId').value = result.data.messages[result.data.messages.length - 1].id;
+      }
+      show('wechatOutput', result.data);
+    }
+    async function manualExportImport() {
+      const result = await post('/wechat/manual-export/import', {
+        room_id: document.getElementById('wechatRoom').value,
+        file_path: document.getElementById('exportPath').value
+      });
+      if (result.ok && result.data[0]) document.getElementById('commandMessageId').value = result.data[result.data.length - 1].id;
+      show('wechatOutput', result.data);
+    }
+    async function processNewCommands() {
+      const result = await post('/bot/process-new-messages');
+      if (result.ok && result.data[0]) document.getElementById('commandMessageId').value = result.data[result.data.length - 1].message_id;
+      show('wechatOutput', result.data);
+    }
+    async function loadMessages() {
+      show('wechatOutput', (await request('/messages')).data);
+    }
+    async function loadCommandLogs() {
+      show('wechatOutput', (await request('/bot/commands')).data);
+    }
+    async function createSegmentFromCommand() {
+      const messageId = document.getElementById('commandMessageId').value;
+      const contextWindow = Number(document.getElementById('contextWindow').value || '8');
+      const result = await post(`/segments/from-command/${messageId}`, { context_window_size: contextWindow });
+      if (result.ok) document.getElementById('segmentId').value = result.data.id;
+      show('candidateOutput', result.data);
+    }
+    async function createCandidate() {
+      const segmentId = document.getElementById('segmentId').value;
+      const result = await post(`/task-candidates/from-segment/${segmentId}`);
+      if (result.ok) document.getElementById('candidateId').value = result.data.id;
+      show('candidateOutput', result.data);
+    }
+    async function updateCandidate() {
+      const candidateId = document.getElementById('candidateId').value;
+      const criteria = document.getElementById('candidateCriteria').value.split('\\n').map(x => x.trim()).filter(Boolean);
+      show('candidateOutput', (await post(`/task-candidates/${candidateId}/update`, {
+        repo_path: document.getElementById('candidateRepoPath').value,
+        acceptance_criteria: criteria
+      })).data);
+    }
+    async function convertCandidate() {
+      const candidateId = document.getElementById('candidateId').value;
+      const result = await post(`/task-candidates/${candidateId}/convert-to-workdoc`);
+      if (result.ok) document.getElementById('workdocId').value = result.data.id;
+      show('candidateOutput', result.data);
+      await loadWorkDocs();
+    }
+    async function sendCandidateFeedback() {
+      const candidateId = document.getElementById('candidateId').value;
+      show('candidateOutput', (await post(`/chat-feedback/task-candidate/${candidateId}`, {
+        room_id: document.getElementById('wechatRoom').value,
+        adapter_type: 'mock'
+      })).data);
+    }
+    async function loadSegments() {
+      show('candidateOutput', (await request('/segments')).data);
+    }
+    async function loadCandidates() {
+      show('candidateOutput', (await request('/task-candidates')).data);
     }
     async function importMessage() {
       const result = await post('/messages/import', { messages: [{ room_id: 'mock-room', text: document.getElementById('message').value }] });

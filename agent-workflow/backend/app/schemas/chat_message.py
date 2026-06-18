@@ -14,6 +14,7 @@ class ChatMessageCreate(BaseModel):
     text: str
     attachments: list[Any] = Field(default_factory=list)
     raw_json: dict[str, Any] = Field(default_factory=dict)
+    source_message_fingerprint: str | None = None
 
 
 class ChatMessageImportRequest(BaseModel):
@@ -33,4 +34,5 @@ class ChatMessageRead(BaseModel):
     text: str
     attachments: list[Any]
     raw_json: dict[str, Any]
+    source_message_fingerprint: str | None
     status: str

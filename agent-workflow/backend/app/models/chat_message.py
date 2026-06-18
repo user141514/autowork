@@ -24,4 +24,5 @@ class ChatMessage(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     attachments: Mapped[list] = mapped_column(JSON, default=list)
     raw_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_message_fingerprint: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(64), default=WorkflowStatus.MESSAGE_RECEIVED.value, index=True)
