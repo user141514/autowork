@@ -1,11 +1,17 @@
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database import SessionLocal
 from app.main import create_app
+from app.models.enums import PolicyDecisionType, WorkflowStatus
+from app.models.workdoc import WorkDoc
+from app.schemas.policy import PolicyDecisionResult
+from app.services.policy_gate import PolicyGate
 
 
 def test_workdoc_state_machine_and_mock_agent(tmp_path: Path) -> None:
@@ -138,6 +144,149 @@ def test_validate_requires_acceptance_criteria() -> None:
         assert payload["valid"] is False
         assert payload["workdoc"]["status"] == "HUMAN_REVIEW_REQUIRED"
         assert "acceptance_criteria is required" in payload["reasons"]
+
+
+def test_workdoc_human_review_can_be_updated_and_revalidated() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "随便看看这个页面。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        blocked = client.post(f"/workdocs/{workdoc['id']}/validate")
+        assert blocked.status_code == 200
+        assert blocked.json()["valid"] is False
+        assert blocked.json()["workdoc"]["status"] == "HUMAN_REVIEW_REQUIRED"
+
+        updated = client.patch(
+            f"/workdocs/{workdoc['id']}",
+            json={
+                "problem_summary": "页面加载异常",
+                "acceptance_criteria": ["页面应显示错误提示"],
+                "test": {"commands": ["python -c \"print('ok')\""], "required": True},
+            },
+        )
+        assert updated.status_code == 200
+        payload = updated.json()
+        assert payload["status"] == "WORKDOC_DRAFTED"
+        assert payload["problem_summary"] == "页面加载异常"
+        assert payload["acceptance_criteria"] == ["页面应显示错误提示"]
+        assert payload["test"]["required"] is True
+
+        revalidated = client.post(f"/workdocs/{workdoc['id']}/validate")
+        assert revalidated.status_code == 200
+        assert revalidated.json()["valid"] is True
+        assert revalidated.json()["workdoc"]["status"] == "WORKDOC_VALIDATED"
+
+        approved = client.post(f"/workdocs/{workdoc['id']}/approve")
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "APPROVED_FOR_AGENT"
+
+
+def test_workdoc_update_blocked_for_approved_state() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "设置按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        client.post(f"/workdocs/{workdoc['id']}/validate")
+        approved = client.post(f"/workdocs/{workdoc['id']}/approve")
+        assert approved.status_code == 200
+
+        blocked = client.patch(
+            f"/workdocs/{workdoc['id']}",
+            json={"acceptance_criteria": ["不应该允许修改"]},
+        )
+        assert blocked.status_code == 409
+        assert "only draft or blocked" in blocked.json()["detail"]
+
+
+def test_workdoc_update_blocked_for_validated_state() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "设置按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        validated = client.post(f"/workdocs/{workdoc['id']}/validate")
+        assert validated.status_code == 200
+        assert validated.json()["workdoc"]["status"] == "WORKDOC_VALIDATED"
+
+        blocked = client.patch(
+            f"/workdocs/{workdoc['id']}",
+            json={"acceptance_criteria": ["不应该允许修改"]},
+        )
+        assert blocked.status_code == 409
+        assert "only draft or blocked" in blocked.json()["detail"]
+
+
+def test_workdoc_update_review_empty_object_preserves_risk_level() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "生产支付按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+        assert workdoc["risk_level"] == "high"
+
+        updated = client.patch(f"/workdocs/{workdoc['id']}", json={"review": {}})
+        assert updated.status_code == 200
+        assert updated.json()["risk_level"] == "high"
+        assert updated.json()["review"]["risk_level"] == "high"
+
+
+def test_workdoc_update_rejects_invalid_risk_level() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "设置按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        rejected = client.patch(f"/workdocs/{workdoc['id']}", json={"review": {"risk_level": "critical"}})
+        assert rejected.status_code == 422
+
+
+def test_policy_blocked_workdoc_can_be_updated_and_clears_approval_timestamp() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "随便看看这个页面。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        with SessionLocal() as db:
+            row = db.get(WorkDoc, workdoc["id"])
+            assert row is not None
+            row.status = WorkflowStatus.POLICY_BLOCKED.value
+            row.approved_at = datetime.now(timezone.utc)
+            db.commit()
+
+        updated = client.patch(
+            f"/workdocs/{workdoc['id']}",
+            json={"acceptance_criteria": ["页面应显示错误提示"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["status"] == "WORKDOC_DRAFTED"
+        assert updated.json()["approved_at"] is None
+
+
+def test_approve_policy_block_clears_approval_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forced_block(self: PolicyGate, workdoc: WorkDoc) -> PolicyDecisionResult:
+        return PolicyDecisionResult(
+            decision=PolicyDecisionType.BLOCK.value,
+            stage="agent_execution",
+            reasons=["forced block"],
+            metadata={},
+        )
+
+    monkeypatch.setattr(PolicyGate, "decide_agent_execution", forced_block)
+
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "设置按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+        client.post(f"/workdocs/{workdoc['id']}/validate")
+
+        blocked = client.post(f"/workdocs/{workdoc['id']}/approve")
+        assert blocked.status_code == 409
+        assert "forced block" in blocked.json()["detail"]
+
+        current = client.get(f"/workdocs/{workdoc['id']}")
+        assert current.json()["status"] == "POLICY_BLOCKED"
+        assert current.json()["approved_at"] is None
 
 
 def test_claude_cli_default_is_command_plan(tmp_path: Path) -> None:

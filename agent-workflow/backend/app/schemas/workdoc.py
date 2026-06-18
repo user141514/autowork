@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,7 +29,7 @@ class GitConfig(BaseModel):
 
 class ReviewConfig(BaseModel):
     require_human_approval: bool = True
-    risk_level: str = "low"
+    risk_level: Literal["low", "medium", "high"] = "low"
 
 
 class WorkDocFromMessagesRequest(BaseModel):
@@ -48,6 +49,22 @@ class WorkDocFromTaskCandidateRequest(BaseModel):
     repo_name: str = "demo-repo"
     repo_path: str = "."
     branch_base: str = "main"
+    execution: ExecutionConfig | None = None
+    test: TestConfig | None = None
+    agent: AgentConfig | None = None
+    git: GitConfig | None = None
+    review: ReviewConfig | None = None
+
+
+class WorkDocUpdateRequest(BaseModel):
+    title: str | None = None
+    problem_summary: str | None = None
+    observed_behavior: str | None = None
+    expected_behavior: str | None = None
+    constraints: list[str] | None = None
+    acceptance_criteria: list[str] | None = None
+    evidence_message_ids: list[int] | None = None
+    uncertainties: list[str] | None = None
     execution: ExecutionConfig | None = None
     test: TestConfig | None = None
     agent: AgentConfig | None = None

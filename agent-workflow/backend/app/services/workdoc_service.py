@@ -14,6 +14,7 @@ from app.schemas.workdoc import (
     TestConfig,
     WorkDocFromMessagesRequest,
     WorkDocFromTaskCandidateRequest,
+    WorkDocUpdateRequest,
 )
 from app.services.errors import InvalidStateError, NotFoundError
 from app.services.message_store import MessageStore
@@ -21,6 +22,17 @@ from app.services.policy_gate import PolicyGate
 
 
 class WorkDocService:
+    _UPDATABLE_FIELDS: tuple[str, ...] = (
+        "title",
+        "problem_summary",
+        "observed_behavior",
+        "expected_behavior",
+        "constraints",
+        "acceptance_criteria",
+        "evidence_message_ids",
+        "uncertainties",
+    )
+
     def __init__(self, db: Session):
         self.db = db
         self.policy_gate = PolicyGate(db)
@@ -104,21 +116,71 @@ class WorkDocService:
         if workdoc.status != WorkflowStatus.WORKDOC_VALIDATED.value:
             raise InvalidStateError("only WORKDOC_VALIDATED WorkDocs can be approved")
 
+        approved_at = datetime.now(timezone.utc)
         workdoc.status = WorkflowStatus.WORKDOC_APPROVED.value
-        workdoc.approved_at = datetime.now(timezone.utc)
-        self.db.commit()
-        self.db.refresh(workdoc)
+        workdoc.approved_at = approved_at
 
-        decision = self.policy_gate.decide_agent_execution(workdoc)
+        decision = PolicyGate().decide_agent_execution(workdoc)
         if decision.decision == PolicyDecisionType.BLOCK.value:
             workdoc.status = WorkflowStatus.POLICY_BLOCKED.value
+            workdoc.approved_at = None
             self.db.commit()
+            self._record_agent_execution_decision(workdoc, decision)
             raise InvalidStateError("; ".join(decision.reasons))
 
         workdoc.status = WorkflowStatus.APPROVED_FOR_AGENT.value
         self.db.commit()
+        self._record_agent_execution_decision(workdoc, decision)
         self.db.refresh(workdoc)
         return workdoc
+
+    def update(self, workdoc_id: int, request: WorkDocUpdateRequest) -> WorkDoc:
+        workdoc = self.get_workdoc(workdoc_id)
+        if workdoc.status not in {
+            WorkflowStatus.WORKDOC_DRAFTED.value,
+            WorkflowStatus.HUMAN_REVIEW_REQUIRED.value,
+            WorkflowStatus.POLICY_BLOCKED.value,
+        }:
+            raise InvalidStateError(
+                f"only draft or blocked WorkDocs can be updated; current status: {workdoc.status}"
+            )
+
+        for field in self._UPDATABLE_FIELDS:
+            value = getattr(request, field, None)
+            if value is not None:
+                setattr(workdoc, field, value)
+
+        review_update = request.review.model_dump(exclude_unset=True) if request.review is not None else {}
+        for config_field in ("execution", "test", "agent", "git", "review"):
+            value = getattr(request, config_field, None)
+            if value is not None:
+                existing = getattr(workdoc, config_field) or {}
+                update = review_update if config_field == "review" else value.model_dump(exclude_unset=True)
+                merged = {**existing, **update}
+                setattr(workdoc, config_field, merged)
+
+        if "risk_level" in review_update:
+            workdoc.risk_level = review_update["risk_level"]
+        if request.acceptance_criteria:
+            workdoc.uncertainties = [
+                item for item in (workdoc.uncertainties or []) if "acceptance criteria" not in item.lower()
+            ]
+
+        workdoc.status = WorkflowStatus.WORKDOC_DRAFTED.value
+        workdoc.approved_at = None
+        self.db.commit()
+        self.db.refresh(workdoc)
+        return workdoc
+
+    def _record_agent_execution_decision(self, workdoc: WorkDoc, decision) -> None:
+        self.policy_gate._record(
+            workdoc_id=workdoc.id,
+            agent_run_id=None,
+            stage=decision.stage,
+            decision=decision.decision,
+            reasons=decision.reasons,
+            metadata={"status": workdoc.status},
+        )
 
     def _create_workdoc(
         self,

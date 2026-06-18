@@ -6,6 +6,7 @@ from app.schemas.workdoc import (
     WorkDocFromMessagesRequest,
     WorkDocFromTaskCandidateRequest,
     WorkDocRead,
+    WorkDocUpdateRequest,
     WorkDocValidationResult,
 )
 from app.services.workdoc_service import WorkDocService
@@ -35,6 +36,11 @@ def list_workdocs(db: Session = Depends(get_db)):
 @router.get("/{workdoc_id}", response_model=WorkDocRead)
 def get_workdoc(workdoc_id: int, db: Session = Depends(get_db)):
     return WorkDocService(db).get_workdoc(workdoc_id)
+
+
+@router.patch("/{workdoc_id}", response_model=WorkDocRead)
+def update_workdoc(workdoc_id: int, request: WorkDocUpdateRequest, db: Session = Depends(get_db)):
+    return WorkDocService(db).update(workdoc_id, request)
 
 
 @router.post("/{workdoc_id}/validate", response_model=WorkDocValidationResult)

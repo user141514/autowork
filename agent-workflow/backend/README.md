@@ -110,6 +110,7 @@ Dangerous operations are off by default.
 - `POST /workdocs/from-task-candidate`
 - `GET /workdocs`
 - `GET /workdocs/{id}`
+- `PATCH /workdocs/{id}`
 - `POST /workdocs/{id}/validate`
 - `POST /workdocs/{id}/approve`
 - `POST /agent-runs/from-workdoc/{id}`
@@ -257,6 +258,8 @@ New WorkDocs include these config blocks while remaining compatible with old row
 ```
 
 Approve now transitions a validated WorkDoc to `APPROVED_FOR_AGENT`. Commit dry-runs return `APPROVED_FOR_COMMIT`.
+
+`PATCH /workdocs/{id}` lets a human repair a draft or blocked WorkDoc before re-validation. It is allowed only for `WORKDOC_DRAFTED`, `HUMAN_REVIEW_REQUIRED`, and `POLICY_BLOCKED`; successful updates reset the WorkDoc to `WORKDOC_DRAFTED`.
 
 ## Phase 8 PolicyGate
 
