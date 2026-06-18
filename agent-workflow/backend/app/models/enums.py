@@ -1,0 +1,48 @@
+from enum import Enum
+
+
+class WorkflowStatus(str, Enum):
+    MESSAGE_RECEIVED = "MESSAGE_RECEIVED"
+    TASK_CANDIDATE_CREATED = "TASK_CANDIDATE_CREATED"
+    WORKDOC_DRAFTED = "WORKDOC_DRAFTED"
+    WORKDOC_VALIDATED = "WORKDOC_VALIDATED"
+    WORKDOC_APPROVED = "WORKDOC_APPROVED"
+    AGENT_RUN_CREATED = "AGENT_RUN_CREATED"
+    AGENT_RUNNING = "AGENT_RUNNING"
+    PATCH_CREATED = "PATCH_CREATED"
+    TEST_RUNNING = "TEST_RUNNING"
+    TEST_FAILED = "TEST_FAILED"
+    TEST_PASSED = "TEST_PASSED"
+    GIT_COMMITTED = "GIT_COMMITTED"
+    PR_CREATED = "PR_CREATED"
+    REPORTED_BACK = "REPORTED_BACK"
+    HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
+    POLICY_BLOCKED = "POLICY_BLOCKED"
+    APPROVED_FOR_AGENT = "APPROVED_FOR_AGENT"
+    APPROVED_FOR_COMMIT = "APPROVED_FOR_COMMIT"
+    TEST_TIMEOUT = "TEST_TIMEOUT"
+    TEST_NOT_CONFIGURED = "TEST_NOT_CONFIGURED"
+
+
+class RiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class AgentType(str, Enum):
+    MOCK = "mock"
+    CLAUDE_CLI = "claude_cli"
+    GAGENT_DESKTOP = "gagent_desktop"
+
+
+class PolicyDecisionType(str, Enum):
+    ALLOW = "allow"
+    BLOCK = "block"
+    REQUIRE_HUMAN_REVIEW = "require_human_review"
+
+
+class GAgentDesktopMode(str, Enum):
+    CLI = "cli"
+    HTTP = "http"
+    LOCAL_IPC = "local_ipc"
