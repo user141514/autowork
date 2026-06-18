@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends, Path, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -29,26 +29,43 @@ def create_workdoc_from_task_candidate(request: WorkDocFromTaskCandidateRequest,
 
 
 @router.get("", response_model=list[WorkDocRead])
-def list_workdocs(db: Session = Depends(get_db)):
-    return WorkDocService(db).list_workdocs()
+def list_workdocs(
+    status: str | None = Query(default=None, min_length=1),
+    risk_level: str | None = Query(default=None, min_length=1),
+    repo_name: str | None = Query(default=None, min_length=1),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return WorkDocService(db).list_workdocs(
+        status=status,
+        risk_level=risk_level,
+        repo_name=repo_name,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{workdoc_id}", response_model=WorkDocRead)
-def get_workdoc(workdoc_id: int, db: Session = Depends(get_db)):
+def get_workdoc(workdoc_id: int = Path(ge=1), db: Session = Depends(get_db)):
     return WorkDocService(db).get_workdoc(workdoc_id)
 
 
 @router.patch("/{workdoc_id}", response_model=WorkDocRead)
-def update_workdoc(workdoc_id: int, request: WorkDocUpdateRequest, db: Session = Depends(get_db)):
+def update_workdoc(
+    workdoc_id: int = Path(ge=1),
+    request: WorkDocUpdateRequest = Body(...),
+    db: Session = Depends(get_db),
+):
     return WorkDocService(db).update(workdoc_id, request)
 
 
 @router.post("/{workdoc_id}/validate", response_model=WorkDocValidationResult)
-def validate_workdoc(workdoc_id: int, db: Session = Depends(get_db)):
+def validate_workdoc(workdoc_id: int = Path(ge=1), db: Session = Depends(get_db)):
     workdoc, valid, reasons = WorkDocService(db).validate(workdoc_id)
     return WorkDocValidationResult(workdoc=WorkDocRead.model_validate(workdoc), valid=valid, reasons=reasons)
 
 
 @router.post("/{workdoc_id}/approve", response_model=WorkDocRead)
-def approve_workdoc(workdoc_id: int, db: Session = Depends(get_db)):
+def approve_workdoc(workdoc_id: int = Path(ge=1), db: Session = Depends(get_db)):
     return WorkDocService(db).approve(workdoc_id)

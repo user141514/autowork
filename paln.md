@@ -2,55 +2,37 @@
 
 You are an external Claude Code CLI worker. Codex is the supervisor.
 
-Final read-only review. Do not edit files.
+Final read-only confirmation after Codex addressed your latest blocking findings.
 
-Codex has completed the current work:
+Latest fixes:
 
-- `tools/claude_delegate.py` wrapper workflow
-- `--dumb` mode: `paln.md -> response.md`
-- `--no-budget-limit`
-- empty prompt guard
-- mutually exclusive budget flags
-- `AGENTS.md`
-- `.agents/skills/claude-delegate/SKILL.md`
-- `.gitignore` ignores `.agent-work/`
-- WorkDoc `PATCH /workdocs/{id}`
-- WorkDoc PATCH status guard
-- `approved_at` cleanup on PATCH and policy-blocked approve
-- `risk_level` enum validation with `low | medium | high`
-- tests pass: `19 passed`
+- `WorkDocService._ensure_config_defaults()` no longer commits or refreshes in the read path.
+- Defaults are still populated on the in-memory WorkDoc object so legacy rows can serialize.
+- In validate/approve flows, those default config changes now commit in the same transaction as WorkDoc state and PolicyDecision.
+- `PolicyGate.validate_workdoc()` now calls `decide_workdoc_validation(record=False)` and does not persist a PolicyDecision.
+- Internal WorkDocService policy-record helpers default to `commit=False`.
+- Related WorkDoc/AgentRun/Git path IDs now use FastAPI `Path(ge=1)`.
+- Tests pass: `23 passed`.
 
-Important: Codex already fixed the prior review findings about:
+Review only these files:
 
-- `review: {}` downgrading high risk
-- stale `approved_at`
-- approve dual-commit window
-- missing `WORKDOC_VALIDATED` update rejection test
-
-Please inspect only:
-
-- `tools/claude_delegate.py`
-- `AGENTS.md`
-- `.agents/skills/claude-delegate/SKILL.md`
-- `.gitignore`
-- `agent-workflow/backend/app/schemas/workdoc.py`
+- `agent-workflow/backend/app/services/policy_gate.py`
 - `agent-workflow/backend/app/services/workdoc_service.py`
 - `agent-workflow/backend/app/api/workdocs.py`
+- `agent-workflow/backend/app/api/agent_runs.py`
+- `agent-workflow/backend/app/api/git_ops.py`
 - `agent-workflow/backend/tests/test_workflow.py`
-- `agent-workflow/backend/README.md`
 
-Output exactly:
+Output:
 
 ```markdown
-# Final Review
+# Final Confirmation
 
 ## Blocking Findings
 
 ## Non-Blocking Notes
 
-## Validation Confidence
-
-## Recommended Next Step
+## Confidence
 ```
 
 Do not edit files. Do not commit. Do not push.

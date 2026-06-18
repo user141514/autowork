@@ -114,14 +114,17 @@ Dangerous operations are off by default.
 - `POST /workdocs/{id}/validate`
 - `POST /workdocs/{id}/approve`
 - `POST /agent-runs/from-workdoc/{id}`
+- `GET /agent-runs`
 - `GET /agent-runs/{id}`
 - `POST /tests/run-for-agent-run/{agent_run_id}`
 - `GET /tests/{test_run_id}`
+- `GET /git/operations`
 - `POST /git/diff/{agent_run_id}`
 - `POST /git/branch-from-run/{agent_run_id}`
 - `POST /git/commit-from-run/{agent_run_id}`
 - `POST /git/push/{git_operation_id}`
 - `POST /git/create-pr/{git_operation_id}`
+- `GET /policy-decisions`
 - `GET /reports/workdoc/{id}`
 - `GET /reports/workdoc/{id}/markdown`
 - `GET /reports/agent-run/{id}`

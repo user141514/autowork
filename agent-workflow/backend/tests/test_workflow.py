@@ -132,6 +132,106 @@ def test_git_diff_api_and_remote_publish_are_blocked_by_default(tmp_path: Path) 
         assert pr.status_code == 403
 
 
+def test_workdoc_list_filters_and_pagination() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post(
+            "/messages/import",
+            json={
+                "messages": [
+                    {"text": "设置按钮应该跳转到 /settings。"},
+                    {"text": "生产支付页面应该显示认证错误。"},
+                ]
+            },
+        )
+        first_id = imported.json()[0]["id"]
+        second_id = imported.json()[1]["id"]
+        first = client.post(
+            "/workdocs/from-messages",
+            json={"message_ids": [first_id], "repo_name": "app-a"},
+        ).json()
+        second = client.post(
+            "/workdocs/from-messages",
+            json={"message_ids": [second_id], "repo_name": "app-b"},
+        ).json()
+
+        by_repo = client.get("/workdocs?repo_name=app-a")
+        assert by_repo.status_code == 200
+        assert [item["id"] for item in by_repo.json()] == [first["id"]]
+
+        by_risk = client.get("/workdocs?risk_level=high")
+        assert by_risk.status_code == 200
+        assert [item["id"] for item in by_risk.json()] == [second["id"]]
+
+        by_status = client.get("/workdocs?status=WORKDOC_DRAFTED")
+        assert by_status.status_code == 200
+        assert {item["id"] for item in by_status.json()} == {first["id"], second["id"]}
+
+        page = client.get("/workdocs?limit=1&offset=1")
+        assert page.status_code == 200
+        assert len(page.json()) == 1
+        assert page.json()[0]["id"] == second["id"]
+
+        empty = client.get("/workdocs?repo_name=missing")
+        assert empty.status_code == 200
+        assert empty.json() == []
+
+
+def test_policy_decisions_api() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post("/messages/import", json={"messages": [{"text": "设置按钮应该跳转到 /settings。"}]})
+        message_id = imported.json()[0]["id"]
+        workdoc = client.post("/workdocs/from-messages", json={"message_ids": [message_id]}).json()
+
+        client.post(f"/workdocs/{workdoc['id']}/validate")
+        client.post(f"/workdocs/{workdoc['id']}/approve")
+
+        decisions = client.get(f"/policy-decisions?workdoc_id={workdoc['id']}")
+        assert decisions.status_code == 200
+        assert len(decisions.json()) >= 2
+        assert all(item["workdoc_id"] == workdoc["id"] for item in decisions.json())
+
+        by_stage = client.get("/policy-decisions?stage=workdoc_validation")
+        assert by_stage.status_code == 200
+        assert all(item["stage"] == "workdoc_validation" for item in by_stage.json())
+
+        by_decision = client.get("/policy-decisions?decision=allow")
+        assert by_decision.status_code == 200
+        assert all(item["decision"] == "allow" for item in by_decision.json())
+
+        empty = client.get("/policy-decisions?workdoc_id=99999")
+        assert empty.status_code == 200
+        assert empty.json() == []
+
+        invalid = client.get("/policy-decisions?workdoc_id=-1")
+        assert invalid.status_code == 422
+
+
+def test_agent_runs_and_git_operations_can_be_listed_by_workdoc(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+
+    with TestClient(create_app()) as client:
+        workdoc_id = _approved_workdoc(client, repo)
+        agent_run = client.post(f"/agent-runs/from-workdoc/{workdoc_id}", json={"agent_type": "mock"}).json()
+        client.post(f"/git/branch-from-run/{agent_run['id']}", json={"dry_run": True})
+
+        runs = client.get(f"/agent-runs?workdoc_id={workdoc_id}")
+        assert runs.status_code == 200
+        assert len(runs.json()) == 1
+        assert runs.json()[0]["id"] == agent_run["id"]
+
+        operations = client.get(f"/git/operations?workdoc_id={workdoc_id}")
+        assert operations.status_code == 200
+        assert len(operations.json()) == 1
+        assert operations.json()[0]["workdoc_id"] == workdoc_id
+        assert operations.json()[0]["agent_run_id"] == agent_run["id"]
+
+        invalid_runs = client.get("/agent-runs?workdoc_id=0")
+        assert invalid_runs.status_code == 422
+
+        invalid_operations = client.get("/git/operations?agent_run_id=0")
+        assert invalid_operations.status_code == 422
+
+
 def test_validate_requires_acceptance_criteria() -> None:
     with TestClient(create_app()) as client:
         imported = client.post("/messages/import", json={"messages": [{"text": "随便看看这个页面。"}]})
@@ -197,7 +297,7 @@ def test_workdoc_update_blocked_for_approved_state() -> None:
             json={"acceptance_criteria": ["不应该允许修改"]},
         )
         assert blocked.status_code == 409
-        assert "only draft or blocked" in blocked.json()["detail"]
+        assert "only draft" in blocked.json()["detail"]
 
 
 def test_workdoc_update_blocked_for_validated_state() -> None:
@@ -215,7 +315,7 @@ def test_workdoc_update_blocked_for_validated_state() -> None:
             json={"acceptance_criteria": ["不应该允许修改"]},
         )
         assert blocked.status_code == 409
-        assert "only draft or blocked" in blocked.json()["detail"]
+        assert "only draft" in blocked.json()["detail"]
 
 
 def test_workdoc_update_review_empty_object_preserves_risk_level() -> None:
@@ -264,7 +364,7 @@ def test_policy_blocked_workdoc_can_be_updated_and_clears_approval_timestamp() -
 
 
 def test_approve_policy_block_clears_approval_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
-    def forced_block(self: PolicyGate, workdoc: WorkDoc) -> PolicyDecisionResult:
+    def forced_block(self: PolicyGate, workdoc: WorkDoc, record: bool = True) -> PolicyDecisionResult:
         return PolicyDecisionResult(
             decision=PolicyDecisionType.BLOCK.value,
             stage="agent_execution",
@@ -287,6 +387,12 @@ def test_approve_policy_block_clears_approval_timestamp(monkeypatch: pytest.Monk
         current = client.get(f"/workdocs/{workdoc['id']}")
         assert current.json()["status"] == "POLICY_BLOCKED"
         assert current.json()["approved_at"] is None
+
+
+def test_policy_gate_sensitive_path_matching_is_case_insensitive() -> None:
+    reasons = PolicyGate().validate_changed_files(["config/Secrets.KEY", "safe/readme.md"])
+
+    assert reasons == ["sensitive file change is blocked: config/Secrets.KEY"]
 
 
 def test_claude_cli_default_is_command_plan(tmp_path: Path) -> None:

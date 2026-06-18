@@ -6,6 +6,7 @@ from app.api.chat_feedback import router as chat_feedback_router
 from app.api.dashboard import router as dashboard_router
 from app.api.git_ops import router as git_ops_router
 from app.api.messages import router as messages_router
+from app.api.policy_decisions import router as policy_decisions_router
 from app.api.reports import router as reports_router
 from app.api.segments import router as segments_router
 from app.api.tests import router as tests_router
@@ -37,6 +38,7 @@ router.include_router(task_candidates_router)
 router.include_router(workdocs_router)
 router.include_router(agent_runs_router)
 router.include_router(git_ops_router)
+router.include_router(policy_decisions_router)
 router.include_router(tests_router)
 router.include_router(reports_router)
 router.include_router(wechat_router)

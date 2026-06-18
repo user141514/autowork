@@ -80,8 +80,27 @@ class WorkDocService:
             explicit_acceptance_criteria=candidate.acceptance_criteria,
         )
 
-    def list_workdocs(self) -> list[WorkDoc]:
-        return list(self.db.scalars(select(WorkDoc).order_by(WorkDoc.id.asc())))
+    def list_workdocs(
+        self,
+        status: str | None = None,
+        risk_level: str | None = None,
+        repo_name: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[WorkDoc]:
+        stmt = select(WorkDoc)
+        if status is not None:
+            stmt = stmt.where(WorkDoc.status == status)
+        if risk_level is not None:
+            stmt = stmt.where(WorkDoc.risk_level == risk_level)
+        if repo_name is not None:
+            stmt = stmt.where(WorkDoc.repo_name == repo_name)
+        stmt = stmt.order_by(WorkDoc.id.asc())
+        if offset:
+            stmt = stmt.offset(offset)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.db.scalars(stmt))
 
     def get_workdoc(self, workdoc_id: int) -> WorkDoc:
         workdoc = self.db.get(WorkDoc, workdoc_id)
@@ -99,14 +118,16 @@ class WorkDocService:
         }:
             raise InvalidStateError(f"cannot validate WorkDoc from status {workdoc.status}")
 
-        decision = self.policy_gate.decide_workdoc_validation(workdoc)
+        decision = self.policy_gate.decide_workdoc_validation(workdoc, record=False)
         if decision.reasons:
             workdoc.status = WorkflowStatus.HUMAN_REVIEW_REQUIRED.value
+            self._record_policy_decision(workdoc, decision, commit=False)
             self.db.commit()
             self.db.refresh(workdoc)
             return workdoc, False, decision.reasons
 
         workdoc.status = WorkflowStatus.WORKDOC_VALIDATED.value
+        self._record_policy_decision(workdoc, decision, commit=False)
         self.db.commit()
         self.db.refresh(workdoc)
         return workdoc, True, []
@@ -120,17 +141,17 @@ class WorkDocService:
         workdoc.status = WorkflowStatus.WORKDOC_APPROVED.value
         workdoc.approved_at = approved_at
 
-        decision = PolicyGate().decide_agent_execution(workdoc)
+        decision = self.policy_gate.decide_agent_execution(workdoc, record=False)
         if decision.decision == PolicyDecisionType.BLOCK.value:
             workdoc.status = WorkflowStatus.POLICY_BLOCKED.value
             workdoc.approved_at = None
+            self._record_agent_execution_decision(workdoc, decision, commit=False)
             self.db.commit()
-            self._record_agent_execution_decision(workdoc, decision)
             raise InvalidStateError("; ".join(decision.reasons))
 
         workdoc.status = WorkflowStatus.APPROVED_FOR_AGENT.value
+        self._record_agent_execution_decision(workdoc, decision, commit=False)
         self.db.commit()
-        self._record_agent_execution_decision(workdoc, decision)
         self.db.refresh(workdoc)
         return workdoc
 
@@ -142,7 +163,7 @@ class WorkDocService:
             WorkflowStatus.POLICY_BLOCKED.value,
         }:
             raise InvalidStateError(
-                f"only draft or blocked WorkDocs can be updated; current status: {workdoc.status}"
+                f"only draft, human-review, or policy-blocked WorkDocs can be updated; current status: {workdoc.status}"
             )
 
         for field in self._UPDATABLE_FIELDS:
@@ -172,14 +193,22 @@ class WorkDocService:
         self.db.refresh(workdoc)
         return workdoc
 
-    def _record_agent_execution_decision(self, workdoc: WorkDoc, decision) -> None:
-        self.policy_gate._record(
+    def _record_policy_decision(self, workdoc: WorkDoc, decision, commit: bool = False) -> None:
+        self.policy_gate.record_result(
             workdoc_id=workdoc.id,
             agent_run_id=None,
-            stage=decision.stage,
-            decision=decision.decision,
-            reasons=decision.reasons,
+            result=decision,
             metadata={"status": workdoc.status},
+            commit=commit,
+        )
+
+    def _record_agent_execution_decision(self, workdoc: WorkDoc, decision, commit: bool = False) -> None:
+        self.policy_gate.record_result(
+            workdoc_id=workdoc.id,
+            agent_run_id=None,
+            result=decision,
+            metadata={"status": workdoc.status},
+            commit=commit,
         )
 
     def _create_workdoc(
@@ -226,25 +255,16 @@ class WorkDocService:
         return workdoc
 
     def _ensure_config_defaults(self, workdoc: WorkDoc) -> None:
-        changed = False
         if not workdoc.execution:
             workdoc.execution = ExecutionConfig().model_dump()
-            changed = True
         if not workdoc.test:
             workdoc.test = TestConfig().model_dump()
-            changed = True
         if not workdoc.agent:
             workdoc.agent = AgentConfig().model_dump()
-            changed = True
         if not workdoc.git:
             workdoc.git = GitConfig().model_dump()
-            changed = True
         if not workdoc.review:
             workdoc.review = ReviewConfig(risk_level=workdoc.risk_level).model_dump()
-            changed = True
-        if changed:
-            self.db.commit()
-            self.db.refresh(workdoc)
 
 
 def _make_title(text: str) -> str:

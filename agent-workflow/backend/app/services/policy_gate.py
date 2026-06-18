@@ -18,7 +18,7 @@ class PolicyGate:
     def __init__(self, db: Session | None = None):
         self.db = db
 
-    def decide_workdoc_validation(self, workdoc: WorkDoc) -> PolicyDecisionResult:
+    def decide_workdoc_validation(self, workdoc: WorkDoc, record: bool = True) -> PolicyDecisionResult:
         reasons: list[str] = []
         if not workdoc.title.strip():
             reasons.append("title is required")
@@ -34,16 +34,21 @@ class PolicyGate:
         decision = (
             PolicyDecisionType.REQUIRE_HUMAN_REVIEW.value if reasons else PolicyDecisionType.ALLOW.value
         )
-        return self._record(
-            workdoc_id=workdoc.id,
-            agent_run_id=None,
-            stage="workdoc_validation",
+        result = PolicyDecisionResult(
             decision=decision,
+            stage="workdoc_validation",
             reasons=reasons,
             metadata={"status": workdoc.status},
         )
+        if not record:
+            return result
+        return self.record_result(
+            workdoc_id=workdoc.id,
+            agent_run_id=None,
+            result=result,
+        )
 
-    def decide_agent_execution(self, workdoc: WorkDoc) -> PolicyDecisionResult:
+    def decide_agent_execution(self, workdoc: WorkDoc, record: bool = True) -> PolicyDecisionResult:
         reasons: list[str] = []
         if workdoc.status not in {WorkflowStatus.WORKDOC_APPROVED.value, WorkflowStatus.APPROVED_FOR_AGENT.value}:
             reasons.append("WorkDoc must be approved before AgentRunner execution")
@@ -51,13 +56,22 @@ class PolicyGate:
             reasons.append("acceptance_criteria is required")
 
         decision = PolicyDecisionType.BLOCK.value if reasons else PolicyDecisionType.ALLOW.value
-        return self._record(
+        if not record:
+            return PolicyDecisionResult(
+                decision=decision,
+                stage="agent_execution",
+                reasons=reasons,
+                metadata={"status": workdoc.status},
+            )
+        return self.record_result(
             workdoc_id=workdoc.id,
             agent_run_id=None,
-            stage="agent_execution",
-            decision=decision,
-            reasons=reasons,
-            metadata={"status": workdoc.status},
+            result=PolicyDecisionResult(
+                decision=decision,
+                stage="agent_execution",
+                reasons=reasons,
+                metadata={"status": workdoc.status},
+            ),
         )
 
     def decide_patch(
@@ -76,13 +90,15 @@ class PolicyGate:
         decision = (
             PolicyDecisionType.REQUIRE_HUMAN_REVIEW.value if reasons else PolicyDecisionType.ALLOW.value
         )
-        return self._record(
+        return self.record_result(
             workdoc_id=workdoc.id,
             agent_run_id=agent_run.id,
-            stage="patch_review",
-            decision=decision,
-            reasons=reasons,
-            metadata={"changed_files": changed_files, "diff_stats": diff_stats},
+            result=PolicyDecisionResult(
+                decision=decision,
+                stage="patch_review",
+                reasons=reasons,
+                metadata={"changed_files": changed_files, "diff_stats": diff_stats},
+            ),
         )
 
     def decide_commit(
@@ -105,19 +121,21 @@ class PolicyGate:
             reasons.append(f"dry-run mode blocks dangerous operation: {dangerous_operation}")
 
         decision = PolicyDecisionType.BLOCK.value if reasons else PolicyDecisionType.ALLOW.value
-        return self._record(
+        return self.record_result(
             workdoc_id=workdoc.id,
             agent_run_id=agent_run.id,
-            stage="commit",
-            decision=decision,
-            reasons=reasons,
-            metadata={
-                "changed_files": changed_files,
-                "diff_stats": diff_stats,
-                "latest_test_status": latest_test_status,
-                "dry_run": dry_run,
-                "operation": dangerous_operation,
-            },
+            result=PolicyDecisionResult(
+                decision=decision,
+                stage="commit",
+                reasons=reasons,
+                metadata={
+                    "changed_files": changed_files,
+                    "diff_stats": diff_stats,
+                    "latest_test_status": latest_test_status,
+                    "dry_run": dry_run,
+                    "operation": dangerous_operation,
+                },
+            ),
         )
 
     def decide_remote_publish(
@@ -136,17 +154,19 @@ class PolicyGate:
             reasons.append(f"dry-run mode blocks dangerous operation: {operation_name}")
 
         decision = PolicyDecisionType.BLOCK.value if reasons else PolicyDecisionType.ALLOW.value
-        return self._record(
+        return self.record_result(
             workdoc_id=workdoc.id,
             agent_run_id=None,
-            stage=operation_name,
-            decision=decision,
-            reasons=reasons,
-            metadata={"dry_run": dry_run},
+            result=PolicyDecisionResult(
+                decision=decision,
+                stage=operation_name,
+                reasons=reasons,
+                metadata={"dry_run": dry_run},
+            ),
         )
 
     def validate_workdoc(self, workdoc: WorkDoc) -> list[str]:
-        return self.decide_workdoc_validation(workdoc).reasons
+        return self.decide_workdoc_validation(workdoc, record=False).reasons
 
     def validate_changed_files(self, changed_files: list[str], workdoc: WorkDoc | None = None) -> list[str]:
         if workdoc is None:
@@ -199,8 +219,28 @@ class PolicyGate:
                     metadata_json=metadata,
                 )
             )
-            self.db.commit()
+            self.db.flush()
         return result
+
+    def record_result(
+        self,
+        workdoc_id: int | None,
+        agent_run_id: int | None,
+        result: PolicyDecisionResult,
+        metadata: dict | None = None,
+        commit: bool = True,
+    ) -> PolicyDecisionResult:
+        recorded = self._record(
+            workdoc_id=workdoc_id,
+            agent_run_id=agent_run_id,
+            stage=result.stage,
+            decision=result.decision,
+            reasons=result.reasons,
+            metadata=metadata if metadata is not None else result.metadata,
+        )
+        if commit and self.db is not None:
+            self.db.commit()
+        return recorded
 
 
 def _execution_config(workdoc: WorkDoc) -> dict:
@@ -228,7 +268,12 @@ def _matches_any(file_name: str, patterns: list[str]) -> bool:
     basename = PurePosixPath(normalized).name
     if any(pattern in {"*", "**", "**/*"} for pattern in patterns):
         return True
-    return any(fnmatch(normalized, pattern) or fnmatch(basename, pattern) for pattern in patterns)
+    normalized_lower = normalized.lower()
+    basename_lower = basename.lower()
+    return any(
+        fnmatch(normalized_lower, pattern.lower()) or fnmatch(basename_lower, pattern.lower())
+        for pattern in patterns
+    )
 
 
 def _normalize_path(file_name: str) -> str:
