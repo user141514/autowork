@@ -88,15 +88,30 @@ echo Checking wxauto...
 %PYTHON_EXE% -c "import wxauto" >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo [ERROR] wxauto is not installed.
-  echo Install it in the current Python environment first:
-  echo   %PYTHON_EXE% -m pip install wxauto
-  echo.
-  echo Also make sure Windows WeChat Desktop is open and logged in.
-  echo [%DATE% %TIME%] wxauto missing >> "%LOG_FILE%"
-  echo.
-  pause
-  exit /b 1
+  echo wxauto is not installed. Installing wxauto...
+  echo [%DATE% %TIME%] Installing wxauto >> "%LOG_FILE%"
+  %PYTHON_EXE% -m pip install wxauto
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] wxauto installation failed.
+    echo         You can install it manually:
+    echo         %PYTHON_EXE% -m pip install wxauto
+    echo         Log: %LOG_FILE%
+    echo [%DATE% %TIME%] wxauto installation failed >> "%LOG_FILE%"
+    echo.
+    pause
+    exit /b 1
+  )
+  %PYTHON_EXE% -c "import wxauto" >nul 2>nul
+  if errorlevel 1 (
+    echo.
+    echo [ERROR] wxauto was installed but still cannot be imported.
+    echo         Log: %LOG_FILE%
+    echo [%DATE% %TIME%] wxauto import still failed >> "%LOG_FILE%"
+    echo.
+    pause
+    exit /b 1
+  )
 )
 
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'"`) do set "POLL_SINCE=%%T"

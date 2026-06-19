@@ -183,7 +183,9 @@ set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
 python scripts\poll_wechat_messages.py --once --dry-run
 ```
 
-On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`.
+On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`. The launcher will try to install `wxauto` automatically if it is missing.
+
+For WeChat groups that use default member names as the chat title, the wxauto adapter supports simple substring matching against the current session list. For example, entering `Bob` can match `Alice, Bob, Carol`; if more than one session matches, the adapter rejects the run and asks for a more specific name.
 
 Run the local polling script continuously:
 

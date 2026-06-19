@@ -13,7 +13,7 @@ class WxautoAdapter(ChatAdapter):
 
     def __init__(self, whitelist_rooms: list[str] | tuple[str, ...] | None = None):
         settings = get_settings()
-        self.whitelist_rooms = set(whitelist_rooms or settings.wechat_whitelist_rooms)
+        self.whitelist_rooms = {_normalize_room_name(room) for room in (whitelist_rooms or settings.wechat_whitelist_rooms)}
         self._wechat = None
 
     def listen(self, room_id: str) -> list[ChatMessageCreate]:
@@ -22,26 +22,26 @@ class WxautoAdapter(ChatAdapter):
     def read_recent_messages(self, room_id: str, limit: int = 20) -> list[ChatMessageCreate]:
         if not get_settings().personal_wechat_enabled:
             raise PolicyViolationError("PERSONAL_WECHAT_DISABLED")
-        self._ensure_allowed_room(room_id)
         limit = min(limit, get_settings().wechat_read_limit)
         wechat = self._client()
-        self._switch_to_chat(wechat, room_id)
+        resolved_room_id = self._resolve_room_id(wechat, room_id)
+        self._switch_to_chat(wechat, resolved_room_id)
         raw_messages = self._get_messages(wechat)
         indexed_messages = list(enumerate(raw_messages))
         indexed_messages = indexed_messages[-limit:] if limit > 0 else indexed_messages
-        return [self._to_chat_message(room_id, raw, raw_index) for raw_index, raw in indexed_messages]
+        return [self._to_chat_message(resolved_room_id, raw, raw_index) for raw_index, raw in indexed_messages]
 
     def send_message(self, room_id: str, text: str) -> None:
         if not get_settings().personal_wechat_enabled:
             raise PolicyViolationError("PERSONAL_WECHAT_DISABLED")
         if not get_settings().wechat_send_enabled:
             raise PolicyViolationError("WECHAT_SEND_DISABLED")
-        self._ensure_allowed_room(room_id)
         wechat = self._client()
-        self._switch_to_chat(wechat, room_id)
+        resolved_room_id = self._resolve_room_id(wechat, room_id)
+        self._switch_to_chat(wechat, resolved_room_id)
         if hasattr(wechat, "SendMsg"):
             try:
-                wechat.SendMsg(text, who=room_id)
+                wechat.SendMsg(text, who=resolved_room_id)
             except TypeError:
                 wechat.SendMsg(text)
             return
@@ -52,12 +52,12 @@ class WxautoAdapter(ChatAdapter):
             raise PolicyViolationError("PERSONAL_WECHAT_DISABLED")
         if not get_settings().wechat_send_enabled:
             raise PolicyViolationError("WECHAT_SEND_DISABLED")
-        self._ensure_allowed_room(room_id)
         wechat = self._client()
-        self._switch_to_chat(wechat, room_id)
+        resolved_room_id = self._resolve_room_id(wechat, room_id)
+        self._switch_to_chat(wechat, resolved_room_id)
         if hasattr(wechat, "SendFiles"):
             try:
-                wechat.SendFiles(file_path, who=room_id)
+                wechat.SendFiles(file_path, who=resolved_room_id)
             except TypeError:
                 wechat.SendFiles(file_path)
             return
@@ -103,8 +103,28 @@ class WxautoAdapter(ChatAdapter):
     def _ensure_allowed_room(self, room_id: str) -> None:
         if not self.whitelist_rooms:
             raise PolicyViolationError("AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS must include allowed group names")
-        if room_id not in self.whitelist_rooms:
+        if not _is_allowed_room_name(room_id, self.whitelist_rooms):
             raise PolicyViolationError(f"WECHAT_ROOM_NOT_ALLOWED: {room_id}")
+
+    def _resolve_room_id(self, wechat: Any, room_id: str) -> str:
+        self._ensure_allowed_room(room_id)
+        normalized_room_id = _normalize_room_name(room_id)
+        session_names = _session_names(wechat)
+        if not session_names:
+            return room_id
+        exact_matches = [name for name in session_names if _normalize_room_name(name) == normalized_room_id]
+        if exact_matches:
+            return exact_matches[0]
+        matches = [
+            name
+            for name in session_names
+            if _is_allowed_room_name(name, {normalized_room_id}) and _is_allowed_room_name(name, self.whitelist_rooms)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise PolicyViolationError(f"WECHAT_ROOM_MATCH_AMBIGUOUS: {room_id} -> {', '.join(matches[:5])}")
+        return room_id
 
     def _switch_to_chat(self, wechat: Any, room_id: str) -> None:
         if hasattr(wechat, "ChatWith"):
@@ -167,6 +187,41 @@ def _get_attr(raw: Any, names: list[str], default: Any) -> Any:
         if "content" in names and len(raw) > 1:
             return raw[1]
     return default
+
+
+def _normalize_room_name(value: Any) -> str:
+    return " ".join(str(value or "").strip().split()).lower()
+
+
+def _is_allowed_room_name(room_id: str, whitelist_rooms: set[str]) -> bool:
+    normalized_room_id = _normalize_room_name(room_id)
+    if not normalized_room_id:
+        return False
+    if normalized_room_id in whitelist_rooms:
+        return True
+    return any(
+        len(allowed_room) >= 2 and (allowed_room in normalized_room_id or normalized_room_id in allowed_room)
+        for allowed_room in whitelist_rooms
+    )
+
+
+def _session_names(wechat: Any) -> list[str]:
+    for method_name in ("GetSessionList", "GetAllSessions", "GetAllSession", "GetSession"):
+        if not hasattr(wechat, method_name):
+            continue
+        sessions = getattr(wechat, method_name)()
+        names = [_session_name(session) for session in list(sessions or [])]
+        return [name for name in names if name]
+    return []
+
+
+def _session_name(session: Any) -> str:
+    if isinstance(session, str):
+        return session
+    value = _get_attr(session, ["name", "Name", "nickname", "NickName", "remark", "Remark", "title", "Title"], default=None)
+    if value is not None:
+        return str(value)
+    return ""
 
 
 def _safe_raw(raw: Any) -> Any:

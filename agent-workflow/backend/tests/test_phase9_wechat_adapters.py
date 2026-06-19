@@ -136,6 +136,57 @@ def test_wxauto_adapter_uses_whitelist_and_maps_messages(monkeypatch) -> None:
         get_settings.cache_clear()
 
 
+def test_wxauto_adapter_resolves_room_by_whitelisted_substring(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
+    get_settings.cache_clear()
+
+    class FakeWechat:
+        def __init__(self) -> None:
+            self.chat_with = None
+
+        def GetSessionList(self):
+            return ["Alice, Bob, Carol", "Ops Team"]
+
+        def ChatWith(self, room_id: str) -> None:
+            self.chat_with = room_id
+
+        def GetAllMessage(self):
+            return [{"sender": "Alice", "content": "@WorkBot fix login"}]
+
+    fake = FakeWechat()
+    adapter = WxautoAdapter(whitelist_rooms=("Bob",))
+    adapter._wechat = fake
+
+    try:
+        messages = adapter.read_recent_messages("Bob", limit=20)
+
+        assert fake.chat_with == "Alice, Bob, Carol"
+        assert messages[0].room_id == "Alice, Bob, Carol"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_wxauto_adapter_rejects_ambiguous_room_substring(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
+    get_settings.cache_clear()
+
+    class FakeWechat:
+        def GetSessionList(self):
+            return ["Alice, Bob, Carol", "Bob, Dave"]
+
+    adapter = WxautoAdapter(whitelist_rooms=("Bob",))
+    adapter._wechat = FakeWechat()
+
+    try:
+        adapter.read_recent_messages("Bob", limit=20)
+    except Exception as exc:
+        assert "WECHAT_ROOM_MATCH_AMBIGUOUS" in str(exc)
+    else:
+        raise AssertionError("ambiguous substring match should be rejected")
+    finally:
+        get_settings.cache_clear()
+
+
 def test_wxauto_adapter_fingerprints_identical_batch_messages(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
     get_settings.cache_clear()
