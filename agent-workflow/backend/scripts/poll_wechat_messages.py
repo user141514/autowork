@@ -84,6 +84,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated room names. Defaults to AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS.",
     )
     parser.add_argument(
+        "--resolve-rooms",
+        action="store_true",
+        help="Resolve fuzzy room names against the wxauto session list and prompt when multiple matches exist.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and log messages without writing to the database.",
@@ -196,6 +201,13 @@ def main(argv: list[str] | None = None) -> int:
 
     init_db()
     adapter = PersonalWeChatAdapter(whitelist_rooms=rooms)
+    if args.resolve_rooms:
+        try:
+            rooms = resolve_room_inputs(adapter, rooms, input_func=input, output_func=print)
+        except KeyboardInterrupt:
+            LOGGER.error("Room selection cancelled.")
+            return 130
+        adapter = PersonalWeChatAdapter(whitelist_rooms=rooms)
     should_stop = _StopFlag()
     signal.signal(signal.SIGINT, should_stop.handle)
     signal.signal(signal.SIGTERM, should_stop.handle)
@@ -242,6 +254,46 @@ class _StopFlag:
 
 def _csv_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def resolve_room_inputs(
+    adapter: PersonalWeChatAdapter,
+    rooms: list[str],
+    input_func=input,
+    output_func=print,
+) -> list[str]:
+    resolved_rooms: list[str] = []
+    for room in rooms:
+        candidates = adapter.room_candidates(room)
+        if not candidates:
+            output_func(f"No wxauto session candidates found for '{room}'. Keeping the original input.")
+            resolved_rooms.append(room)
+            continue
+        if len(candidates) == 1:
+            output_func(f"Resolved '{room}' -> '{candidates[0]}'")
+            resolved_rooms.append(candidates[0])
+            continue
+        output_func("")
+        output_func(f"Multiple wxauto sessions match '{room}':")
+        for index, candidate in enumerate(candidates, start=1):
+            output_func(f"  [{index}] {candidate}")
+        selected = _prompt_room_choice(room, candidates, input_func=input_func, output_func=output_func)
+        output_func(f"Resolved '{room}' -> '{selected}'")
+        resolved_rooms.append(selected)
+    return resolved_rooms
+
+
+def _prompt_room_choice(room: str, candidates: list[str], input_func=input, output_func=print) -> str:
+    while True:
+        answer = input_func(f"Select room for '{room}' [1-{len(candidates)}]: ").strip()
+        try:
+            selected_index = int(answer)
+        except ValueError:
+            output_func("Please enter a number from the list.")
+            continue
+        if 1 <= selected_index <= len(candidates):
+            return candidates[selected_index - 1]
+        output_func("Selection out of range.")
 
 
 def _since_datetime(value: str) -> datetime:

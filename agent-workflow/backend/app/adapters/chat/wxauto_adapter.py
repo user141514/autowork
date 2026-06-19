@@ -100,6 +100,13 @@ class WxautoAdapter(ChatAdapter):
     def fetch_recent(self, room_id: str, limit: int | None = None) -> list[ChatMessageCreate]:
         return self.read_recent_messages(room_id, limit or get_settings().wechat_read_limit)
 
+    def room_candidates(self, room_id: str) -> list[str]:
+        self._ensure_allowed_room(room_id)
+        session_names = _session_names(self._client())
+        if not session_names:
+            return []
+        return _matching_session_names(room_id, session_names, self.whitelist_rooms)
+
     def _ensure_allowed_room(self, room_id: str) -> None:
         if not self.whitelist_rooms:
             raise PolicyViolationError("AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS must include allowed group names")
@@ -112,14 +119,7 @@ class WxautoAdapter(ChatAdapter):
         session_names = _session_names(wechat)
         if not session_names:
             return room_id
-        exact_matches = [name for name in session_names if _normalize_room_name(name) == normalized_room_id]
-        if exact_matches:
-            return exact_matches[0]
-        matches = [
-            name
-            for name in session_names
-            if _is_allowed_room_name(name, {normalized_room_id}) and _is_allowed_room_name(name, self.whitelist_rooms)
-        ]
+        matches = _matching_session_names(room_id, session_names, self.whitelist_rooms)
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
@@ -203,6 +203,18 @@ def _is_allowed_room_name(room_id: str, whitelist_rooms: set[str]) -> bool:
         len(allowed_room) >= 2 and (allowed_room in normalized_room_id or normalized_room_id in allowed_room)
         for allowed_room in whitelist_rooms
     )
+
+
+def _matching_session_names(room_id: str, session_names: list[str], whitelist_rooms: set[str]) -> list[str]:
+    normalized_room_id = _normalize_room_name(room_id)
+    exact_matches = [name for name in session_names if _normalize_room_name(name) == normalized_room_id]
+    if exact_matches:
+        return exact_matches
+    return [
+        name
+        for name in session_names
+        if _is_allowed_room_name(name, {normalized_room_id}) and _is_allowed_room_name(name, whitelist_rooms)
+    ]
 
 
 def _session_names(wechat: Any) -> list[str]:

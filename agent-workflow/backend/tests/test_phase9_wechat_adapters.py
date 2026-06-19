@@ -166,6 +166,25 @@ def test_wxauto_adapter_resolves_room_by_whitelisted_substring(monkeypatch) -> N
         get_settings.cache_clear()
 
 
+def test_wxauto_adapter_lists_room_candidates(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
+    get_settings.cache_clear()
+
+    class FakeWechat:
+        def GetSessionList(self):
+            return ["Alice, Bob, Carol", "Bob, Dave", "Ops Team"]
+
+    adapter = WxautoAdapter(whitelist_rooms=("Bob",))
+    adapter._wechat = FakeWechat()
+
+    try:
+        candidates = adapter.room_candidates("Bob")
+
+        assert candidates == ["Alice, Bob, Carol", "Bob, Dave"]
+    finally:
+        get_settings.cache_clear()
+
+
 def test_wxauto_adapter_rejects_ambiguous_room_substring(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED", "true")
     get_settings.cache_clear()
@@ -488,6 +507,36 @@ def test_wechat_poller_parse_args_accepts_since_show_new_and_prompt_dir() -> Non
     assert args.since == datetime(2026, 6, 19, 10, 30, tzinfo=timezone.utc)
     assert args.show_new is True
     assert args.prompt_dir == Path(".agent-work/prompts")
+
+
+def test_wechat_poller_parse_args_accepts_resolve_rooms() -> None:
+    module = _load_poller_module()
+
+    args = module.parse_args(["--resolve-rooms"])
+
+    assert args.resolve_rooms is True
+
+
+def test_wechat_poller_resolve_room_inputs_prompts_for_ambiguous_match() -> None:
+    module = _load_poller_module()
+    output: list[str] = []
+
+    class FakeAdapter:
+        def room_candidates(self, room_id: str):
+            assert room_id == "Bob"
+            return ["Alice, Bob, Carol", "Bob, Dave"]
+
+    resolved = module.resolve_room_inputs(
+        FakeAdapter(),
+        ["Bob"],
+        input_func=lambda prompt: "2",
+        output_func=output.append,
+    )
+
+    assert resolved == ["Bob, Dave"]
+    assert "Multiple wxauto sessions match 'Bob':" in output
+    assert "  [1] Alice, Bob, Carol" in output
+    assert "  [2] Bob, Dave" in output
 
 
 def _load_poller_module():

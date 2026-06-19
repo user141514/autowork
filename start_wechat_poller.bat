@@ -132,7 +132,7 @@ echo Press Ctrl+C to stop.
 echo [%DATE% %TIME%] Starting poller rooms=%AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS% since=%POLL_SINCE% >> "%LOG_FILE%"
 echo.
 
-%PYTHON_EXE% scripts\poll_wechat_messages.py --interval 30 --since "%POLL_SINCE%" --show-new --write-agent-prompts ".agent-work\prompts"
+%PYTHON_EXE% scripts\poll_wechat_messages.py --resolve-rooms --interval 30 --since "%POLL_SINCE%" --show-new --write-agent-prompts ".agent-work\prompts"
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
