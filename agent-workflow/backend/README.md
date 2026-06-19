@@ -145,7 +145,7 @@ Dangerous operations are off by default.
 
 ## Phase 9 Personal WeChat Intake
 
-Phase 9 uses readable SQLite exports or already-decrypted WeChat `MSG.db` copies as the preferred local intake path. The project does not extract memory keys, decrypt WeChat databases, hook WeChat, or bypass encryption. UIAutomation / `wxauto` remains only as a legacy experimental path.
+Phase 9 uses user-provided chat text files as the preferred local intake path. The stable V0 path is: copy or export WeChat chat text, give Autowork the file path, parse the text, save normalized messages, query by time/cursor, and build agent input. Database polling and UIAutomation remain optional experimental paths.
 
 Rules:
 
@@ -169,7 +169,42 @@ Supported WorkBot commands:
 - `@WorkBot 确认执行 WD-1`
 - `@WorkBot 报告 WD-1`
 
-Recommended local database polling path:
+Recommended path-based import:
+
+```bash
+F:\autowork\import_wechat_text.bat
+```
+
+Or run the CLI directly:
+
+```bash
+python scripts\import_wechat_text.py --chat "项目群A" --file "F:\tmp\wechat-chat.txt"
+```
+
+The text parser supports common copied WeChat text blocks:
+
+```text
+2026-06-19 10:30
+Alice
+首页设置按钮点了没反应
+应该跳转到 /settings
+```
+
+Repeated imports of the same copied text deduplicate through a stable fingerprint built from chat name, sender, raw time text, and normalized text.
+
+Query imported messages:
+
+```bash
+curl "http://127.0.0.1:8000/messages?room_id=项目群A&start_time=2026-06-19T00:00:00%2B00:00&end_time=2026-06-19T23:59:59%2B00:00&order=asc"
+curl "http://127.0.0.1:8000/messages/latest?room_id=项目群A&since_cursor=123"
+curl "http://127.0.0.1:8000/messages/agent-input?room_id=项目群A"
+```
+
+The agent input endpoint only builds Markdown context. It does not call an LLM or run an Agent.
+
+Experimental local database polling path:
+
+Use this only when you already have a readable SQLite `MSG.db` copy:
 
 ```bash
 F:\autowork\start_wechat_db_poller.bat

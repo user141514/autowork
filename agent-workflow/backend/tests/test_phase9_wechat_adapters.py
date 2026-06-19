@@ -72,6 +72,90 @@ def test_manual_export_import_and_workbot_candidate_flow(tmp_path: Path) -> None
         assert converted.json()["workdoc_id"] == workdoc.json()["id"]
 
 
+def test_manual_export_parses_wechat_copied_text_with_time_sender_and_multiline(tmp_path: Path) -> None:
+    export_file = tmp_path / "wechat-copy.txt"
+    export_file.write_text(
+        "2026-06-19 10:30\n"
+        "Alice\n"
+        "首页设置按钮点了没反应\n"
+        "应该跳转到 /settings\n"
+        "\n"
+        "2026-06-19 10:32\n"
+        "Bob\n"
+        "[图片]\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app()) as client:
+        imported = client.post(
+            "/wechat/manual-export/import",
+            json={"file_path": str(export_file), "room_id": "项目群A"},
+        )
+
+    assert imported.status_code == 200
+    payload = imported.json()
+    assert len(payload) == 2
+    assert payload[0]["room_id"] == "项目群A"
+    assert payload[0]["sender_display_name"] == "Alice"
+    assert payload[0]["timestamp"].startswith("2026-06-19T10:30:00")
+    assert payload[0]["text"] == "首页设置按钮点了没反应\n应该跳转到 /settings"
+    assert payload[0]["message_type"] == "text"
+    assert payload[1]["sender_display_name"] == "Bob"
+    assert payload[1]["message_type"] == "image"
+
+
+def test_manual_export_deduplicates_reimported_wechat_text(tmp_path: Path) -> None:
+    export_file = tmp_path / "wechat-copy.txt"
+    export_file.write_text("2026-06-19 10:30\nAlice\n@WorkBot 修设置按钮\n", encoding="utf-8")
+
+    with TestClient(create_app()) as client:
+        first = client.post("/wechat/manual-export/import", json={"file_path": str(export_file), "room_id": "项目群A"})
+        second = client.post("/wechat/manual-export/import", json={"file_path": str(export_file), "room_id": "项目群A"})
+        listed = client.get("/messages")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()[0]["id"] == second.json()[0]["id"]
+    assert len(listed.json()) == 1
+
+
+def test_messages_query_by_chat_time_and_build_agent_input(tmp_path: Path) -> None:
+    export_file = tmp_path / "wechat-copy.txt"
+    export_file.write_text(
+        "2026-06-19 10:30\nAlice\n普通上下文\n\n"
+        "2026-06-19 10:35\nBob\n@WorkBot 修设置按钮\n\n"
+        "2026-06-19 11:00\nAlice\n太晚的消息\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(create_app()) as client:
+        client.post("/wechat/manual-export/import", json={"file_path": str(export_file), "room_id": "项目群A"})
+        queried = client.get(
+            "/messages",
+            params={
+                "room_id": "项目群A",
+                "start_time": "2026-06-19T10:00:00+00:00",
+                "end_time": "2026-06-19T10:59:59+00:00",
+                "order": "asc",
+            },
+        )
+        latest = client.get("/messages/latest", params={"room_id": "项目群A", "since_cursor": 1})
+        agent_input = client.get(
+            "/messages/agent-input",
+            params={
+                "room_id": "项目群A",
+                "start_time": "2026-06-19T10:00:00+00:00",
+                "end_time": "2026-06-19T10:59:59+00:00",
+            },
+        )
+
+    assert [message["text"] for message in queried.json()] == ["普通上下文", "@WorkBot 修设置按钮"]
+    assert [message["text"] for message in latest.json()] == ["@WorkBot 修设置按钮", "太晚的消息"]
+    assert "# 新消息批次" in agent_input.text
+    assert "来源聊天：项目群A" in agent_input.text
+    assert "- [2026-06-19T10:35:00+00:00] Bob：@WorkBot 修设置按钮" in agent_input.text
+
+
 def test_personal_wechat_messages_cannot_create_workdoc_directly() -> None:
     with TestClient(create_app()) as client:
         imported = client.post(
@@ -683,9 +767,29 @@ def test_wechat_database_poller_resolves_ambiguous_talker_choice() -> None:
     assert "  [1] Alice, Bob, Carol" in output
 
 
+def test_import_wechat_text_parse_args_accepts_chat_and_file() -> None:
+    module = _load_import_wechat_text_module()
+
+    args = module.parse_args(["--chat", "项目群A", "--file", "F:\\tmp\\chat.txt"])
+
+    assert args.chat == "项目群A"
+    assert args.file == Path("F:\\tmp\\chat.txt")
+
+
 def _load_poller_module():
     path = Path(__file__).resolve().parents[1] / "scripts" / "poll_wechat_messages.py"
     spec = importlib.util.spec_from_file_location("poll_wechat_messages", path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_import_wechat_text_module():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "import_wechat_text.py"
+    spec = importlib.util.spec_from_file_location("import_wechat_text", path)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

@@ -42,8 +42,34 @@ class MessageStore:
             self.db.refresh(message)
         return saved
 
-    def list_messages(self) -> list[ChatMessage]:
-        return list(self.db.scalars(select(ChatMessage).order_by(ChatMessage.id.asc())))
+    def list_messages(
+        self,
+        room_id: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int | None = None,
+        order: str = "asc",
+    ) -> list[ChatMessage]:
+        stmt = select(ChatMessage)
+        if room_id is not None:
+            stmt = stmt.where(ChatMessage.room_id == room_id)
+        if start_time is not None:
+            stmt = stmt.where(ChatMessage.timestamp >= start_time)
+        if end_time is not None:
+            stmt = stmt.where(ChatMessage.timestamp <= end_time)
+        stmt = stmt.order_by(ChatMessage.timestamp.desc() if order == "desc" else ChatMessage.timestamp.asc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.db.scalars(stmt))
+
+    def list_messages_since_cursor(self, room_id: str | None, since_cursor: int, limit: int | None = None) -> list[ChatMessage]:
+        stmt = select(ChatMessage).where(ChatMessage.id > since_cursor)
+        if room_id is not None:
+            stmt = stmt.where(ChatMessage.room_id == room_id)
+        stmt = stmt.order_by(ChatMessage.id.asc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(self.db.scalars(stmt))
 
     def get_messages_by_ids(self, message_ids: list[int]) -> list[ChatMessage]:
         if not message_ids:
