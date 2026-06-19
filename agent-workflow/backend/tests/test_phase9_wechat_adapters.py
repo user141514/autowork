@@ -1,10 +1,12 @@
 from pathlib import Path
 import importlib.util
+import sqlite3
 import sys
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
+from app.adapters.chat.wechat_database_adapter import WeChatDatabaseAdapter
 from app.adapters.chat.wxauto_adapter import WxautoAdapter
 from app.config import get_settings
 from app.database import SessionLocal
@@ -89,6 +91,105 @@ def test_personal_wechat_messages_cannot_create_workdoc_directly() -> None:
         direct = client.post("/workdocs/from-messages", json={"message_ids": [message_id]})
         assert direct.status_code == 409
         assert "Segment and TaskCandidate" in direct.json()["detail"]
+
+
+def test_wechat_database_messages_cannot_create_workdoc_directly() -> None:
+    with TestClient(create_app()) as client:
+        imported = client.post(
+            "/messages/import",
+            json={
+                "messages": [
+                    {
+                        "platform": "wechat_database",
+                        "room_id": "room-alpha",
+                        "text": "@WorkBot 设置按钮应该跳转到 /settings。",
+                    }
+                ]
+            },
+        )
+        message_id = imported.json()[0]["id"]
+
+        direct = client.post("/workdocs/from-messages", json={"message_ids": [message_id]})
+        assert direct.status_code == 409
+        assert "Segment and TaskCandidate" in direct.json()["detail"]
+
+
+def test_wechat_database_adapter_reads_time_range_for_talker(tmp_path: Path) -> None:
+    db_path = tmp_path / "MSG.db"
+    _create_msg_db(
+        db_path,
+        [
+            (1718697600, "room-alpha", "old", 0),
+            (1718701200, "room-alpha", "@WorkBot fix dashboard", 0),
+            (1718701300, "room-beta", "@WorkBot ignore other room", 0),
+            (1718784000, "room-alpha", "too late", 1),
+        ],
+    )
+
+    adapter = WeChatDatabaseAdapter(db_path=str(db_path), allowed_talkers=("room-alpha",))
+
+    messages = adapter.fetch_between(
+        talker="room-alpha",
+        start_ts=1718700000,
+        end_ts=1718702000,
+        limit=20,
+    )
+
+    assert len(messages) == 1
+    assert messages[0].platform == "wechat_database"
+    assert messages[0].room_id == "room-alpha"
+    assert messages[0].sender_display_name == "contact"
+    assert messages[0].timestamp == datetime.fromtimestamp(1718701200, timezone.utc)
+    assert messages[0].text == "@WorkBot fix dashboard"
+    assert messages[0].source_message_fingerprint
+
+
+def test_wechat_database_adapter_polls_incremental_messages(tmp_path: Path) -> None:
+    db_path = tmp_path / "MSG.db"
+    _create_msg_db(
+        db_path,
+        [
+            (1718701200, "room-alpha", "already seen", 0),
+            (1718701210, "room-alpha", "@WorkBot new requirement", 0),
+            (1718701220, "room-alpha", "new context", 1),
+        ],
+    )
+
+    adapter = WeChatDatabaseAdapter(db_path=str(db_path), allowed_talkers=("room-alpha",))
+
+    messages = adapter.fetch_since("room-alpha", last_ts=1718701200, limit=20)
+
+    assert [message.text for message in messages] == ["@WorkBot new requirement", "new context"]
+
+
+def test_wechat_database_adapter_lists_and_resolves_talker_candidates(tmp_path: Path) -> None:
+    db_path = tmp_path / "MSG.db"
+    _create_msg_db(
+        db_path,
+        [
+            (1718701200, "Alice, Bob, Carol", "@WorkBot task one", 0),
+            (1718701210, "Bob, Dave", "@WorkBot task two", 0),
+            (1718701220, "Ops Team", "ordinary", 0),
+        ],
+    )
+
+    adapter = WeChatDatabaseAdapter(db_path=str(db_path), allowed_talkers=("Bob",))
+
+    assert adapter.talker_candidates("Bob") == ["Alice, Bob, Carol", "Bob, Dave"]
+
+
+def test_wechat_database_adapter_rejects_unreadable_encrypted_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "MSG.db"
+    db_path.write_bytes(b"not a sqlite database")
+
+    adapter = WeChatDatabaseAdapter(db_path=str(db_path), allowed_talkers=("room-alpha",))
+
+    try:
+        adapter.fetch_since("room-alpha", last_ts=0, limit=20)
+    except Exception as exc:
+        assert "WECHAT_DATABASE_NOT_READABLE" in str(exc)
+    else:
+        raise AssertionError("encrypted or unreadable database should be rejected")
 
 
 def test_wxauto_adapter_uses_whitelist_and_maps_messages(monkeypatch) -> None:
@@ -539,6 +640,49 @@ def test_wechat_poller_resolve_room_inputs_prompts_for_ambiguous_match() -> None
     assert "  [2] Bob, Dave" in output
 
 
+def test_wechat_database_poller_parse_args_accepts_db_path_talkers_and_since() -> None:
+    module = _load_database_poller_module()
+
+    args = module.parse_args(
+        [
+            "--db-path",
+            "F:\\WeChat\\MSG.db",
+            "--talkers",
+            "Bob,Ops",
+            "--since",
+            "2026-06-19 10:30",
+            "--interval",
+            "2",
+        ]
+    )
+
+    assert args.db_path == Path("F:\\WeChat\\MSG.db")
+    assert args.talkers == ["Bob", "Ops"]
+    assert args.since == datetime(2026, 6, 19, 10, 30, tzinfo=timezone.utc)
+    assert args.interval == 2
+
+
+def test_wechat_database_poller_resolves_ambiguous_talker_choice() -> None:
+    module = _load_database_poller_module()
+    output: list[str] = []
+
+    class FakeAdapter:
+        def talker_candidates(self, token: str):
+            assert token == "Bob"
+            return ["Alice, Bob, Carol", "Bob, Dave"]
+
+    resolved = module.resolve_talker_inputs(
+        FakeAdapter(),
+        ["Bob"],
+        input_func=lambda prompt: "1",
+        output_func=output.append,
+    )
+
+    assert resolved == ["Alice, Bob, Carol"]
+    assert "Multiple database talkers match 'Bob':" in output
+    assert "  [1] Alice, Bob, Carol" in output
+
+
 def _load_poller_module():
     path = Path(__file__).resolve().parents[1] / "scripts" / "poll_wechat_messages.py"
     spec = importlib.util.spec_from_file_location("poll_wechat_messages", path)
@@ -548,3 +692,32 @@ def _load_poller_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_database_poller_module():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "poll_wechat_database.py"
+    spec = importlib.util.spec_from_file_location("poll_wechat_database", path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _create_msg_db(db_path: Path, rows: list[tuple[int, str, str, int]]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE MSG (
+                CreateTime INTEGER NOT NULL,
+                StrTalker TEXT NOT NULL,
+                StrContent TEXT,
+                IsSender INTEGER NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO MSG (CreateTime, StrTalker, StrContent, IsSender) VALUES (?, ?, ?, ?)",
+            rows,
+        )

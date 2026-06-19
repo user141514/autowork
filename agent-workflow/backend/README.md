@@ -145,7 +145,7 @@ Dangerous operations are off by default.
 
 ## Phase 9 Personal WeChat Intake
 
-Phase 9 uses Windows WeChat Desktop UIAutomation / `wxauto` as the preferred path. It does not use direct local WeChat database reads as the main route.
+Phase 9 uses readable SQLite exports or already-decrypted WeChat `MSG.db` copies as the preferred local intake path. The project does not extract memory keys, decrypt WeChat databases, hook WeChat, or bypass encryption. UIAutomation / `wxauto` remains only as a legacy experimental path.
 
 Rules:
 
@@ -169,6 +169,31 @@ Supported WorkBot commands:
 - `@WorkBot 确认执行 WD-1`
 - `@WorkBot 报告 WD-1`
 
+Recommended local database polling path:
+
+```bash
+F:\autowork\start_wechat_db_poller.bat
+```
+
+The database poller asks for a readable `MSG.db` path, one or more `StrTalker` values or fuzzy fragments, and a start time. It queries `MSG.CreateTime` incrementally, saves new rows as `ChatMessage`, records new `@WorkBot` commands, and writes prompt drafts under `.agent-work\prompts`. If more than one `StrTalker` matches a fragment, the launcher prompts you to choose by number.
+
+If the file is still encrypted, the poller stops with `WECHAT_DATABASE_NOT_READABLE`. In that case, decrypt or export the database outside this project first, then point the poller at the readable SQLite copy.
+
+Run the database polling script directly:
+
+```bash
+python scripts\poll_wechat_database.py ^
+  --db-path "F:\WeChat\MSG.db" ^
+  --talkers "room-alpha,Bob" ^
+  --resolve-talkers ^
+  --interval 3 ^
+  --since "2026-06-19 10:30" ^
+  --show-new ^
+  --write-agent-prompts .agent-work\prompts
+```
+
+Legacy UIAutomation path:
+
 Install `wxautox` only on a Windows host that already has WeChat Desktop open and logged in. The adapter also supports environments that provide the older `wxauto` module name:
 
 ```bash
@@ -183,7 +208,7 @@ set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
 python scripts\poll_wechat_messages.py --once --dry-run
 ```
 
-On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`. The launcher prints the Python executable it is using and will try to install `wxautox` automatically if neither `wxauto` nor `wxautox` is available.
+On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`. The launcher prints the Python executable it is using, but no longer installs `wxautox` automatically.
 
 For WeChat groups that use default member names as the chat title, the wxauto adapter supports simple substring matching against the current session list. For example, entering `Bob` can match `Alice, Bob, Carol`. The Windows launcher prompts you to choose when multiple sessions match; direct API/script calls still reject ambiguous matches as a safety fallback.
 
@@ -235,7 +260,7 @@ curl -X POST http://127.0.0.1:8000/wechat/manual-export/import ^
   -d "{\"file_path\":\"F:\\\\tmp\\\\chat.txt\",\"room_id\":\"dev-group\"}"
 ```
 
-Database import is intentionally a stub:
+The direct local database API endpoint is intentionally still a stub:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/wechat/local-db/import ^
@@ -243,7 +268,7 @@ curl -X POST http://127.0.0.1:8000/wechat/local-db/import ^
   -d "{\"path\":\"F:\\\\WeChat Files\"}"
 ```
 
-That endpoint returns a policy error instead of attempting decryption or database reverse engineering.
+That endpoint returns a policy error instead of attempting decryption or database reverse engineering. Use `scripts\poll_wechat_database.py` or `start_wechat_db_poller.bat` for readable SQLite `MSG.db` copies.
 
 Create a WorkDoc from a WorkBot command:
 

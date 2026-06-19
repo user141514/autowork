@@ -91,30 +91,14 @@ echo Checking wxauto/wxautox...
 %PYTHON_EXE% -c "import importlib.util, sys; sys.exit(0 if (importlib.util.find_spec('wxauto') or importlib.util.find_spec('wxautox')) else 1)" >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo wxauto/wxautox is not installed. Installing wxautox...
-  echo [%DATE% %TIME%] Installing wxautox >> "%LOG_FILE%"
-  %PYTHON_EXE% -m pip install wxautox >> "%LOG_FILE%" 2>&1
-  if errorlevel 1 (
-    echo.
-    echo [ERROR] wxautox installation failed.
-    echo         You can install it manually:
-    echo         %PYTHON_EXE% -m pip install wxautox
-    echo         Log: %LOG_FILE%
-    echo [%DATE% %TIME%] wxautox installation failed >> "%LOG_FILE%"
-    echo.
-    pause
-    exit /b 1
-  )
-  %PYTHON_EXE% -c "import importlib.util, sys; sys.exit(0 if (importlib.util.find_spec('wxauto') or importlib.util.find_spec('wxautox')) else 1)" >nul 2>nul
-  if errorlevel 1 (
-    echo.
-    echo [ERROR] wxautox was installed but still cannot be imported.
-    echo         Log: %LOG_FILE%
-    echo [%DATE% %TIME%] wxautox import still failed >> "%LOG_FILE%"
-    echo.
-    pause
-    exit /b 1
-  )
+  echo [ERROR] wxauto/wxautox is not installed.
+  echo         This legacy UIAutomation launcher no longer installs wxautox automatically.
+  echo         Prefer start_wechat_db_poller.bat for local database polling.
+  echo         If you still want this legacy path, install a compatible library manually.
+  echo [%DATE% %TIME%] wxauto/wxautox missing >> "%LOG_FILE%"
+  echo.
+  pause
+  exit /b 1
 )
 
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'"`) do set "POLL_SINCE=%%T"

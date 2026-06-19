@@ -44,8 +44,8 @@ class WorkDocService:
             missing = [message_id for message_id in request.message_ids if message_id not in found_ids]
             raise NotFoundError(f"messages not found: {missing}")
 
-        if any(message.platform == "personal_wechat" for message in messages):
-            raise InvalidStateError("personal WeChat messages must enter WorkDoc flow through Segment and TaskCandidate")
+        if any(message.platform in {"personal_wechat", "wechat_database"} for message in messages):
+            raise InvalidStateError("WeChat messages must enter WorkDoc flow through Segment and TaskCandidate")
 
         return self._create_workdoc(
             text="\n".join(message.text for message in messages).strip(),
