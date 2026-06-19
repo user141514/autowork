@@ -183,6 +183,8 @@ set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
 python scripts\poll_wechat_messages.py --once --dry-run
 ```
 
+On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`.
+
 Run the local polling script continuously:
 
 ```bash
