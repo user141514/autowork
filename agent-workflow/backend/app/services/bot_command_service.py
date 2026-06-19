@@ -50,9 +50,13 @@ class BotCommandService:
         self.db.refresh(log)
         return log
 
-    def process_new_messages(self) -> list[BotCommandLog]:
+    def process_new_messages(self, message_ids: list[int] | None = None) -> list[BotCommandLog]:
         logs: list[BotCommandLog] = []
-        for message in MessageStore(self.db).list_unprocessed_command_messages():
+        messages = MessageStore(self.db).list_unprocessed_command_messages()
+        if message_ids is not None:
+            allowed_ids = set(message_ids)
+            messages = [message for message in messages if message.id in allowed_ids]
+        for message in messages:
             try:
                 logs.append(self.process_message(message.id))
             except InvalidStateError:

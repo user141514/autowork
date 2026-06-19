@@ -1,6 +1,7 @@
 from pathlib import Path
 import importlib.util
 import sys
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -297,6 +298,145 @@ def test_wechat_poller_rejects_negative_limit() -> None:
         assert exc.code == 2
     else:
         raise AssertionError("negative --limit should be rejected")
+
+
+def test_wechat_poller_since_filters_old_messages() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [
+                module.ChatMessageCreate(
+                    platform="personal_wechat",
+                    room_id=room_id,
+                    text="@WorkBot old task",
+                    timestamp=datetime(2026, 6, 19, 9, 59, tzinfo=timezone.utc),
+                ),
+                module.ChatMessageCreate(
+                    platform="personal_wechat",
+                    room_id=room_id,
+                    text="@WorkBot new task",
+                    timestamp=datetime(2026, 6, 19, 10, 1, tzinfo=timezone.utc),
+                ),
+            ]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        stats = module.poll_once(
+            FakeAdapter(),
+            settings,
+            db,
+            limit=20,
+            dry_run=False,
+            since=datetime(2026, 6, 19, 10, 0, tzinfo=timezone.utc),
+            show_new=True,
+        )
+
+    assert stats.fetched_count == 2
+    assert stats.imported_count == 1
+    assert len(stats.new_messages) == 1
+    assert stats.new_messages[0].text == "@WorkBot new task"
+    assert stats.command_count == 1
+
+
+def test_wechat_poller_since_skips_messages_without_timestamps() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [
+                module.ChatMessageCreate(
+                    platform="personal_wechat",
+                    room_id=room_id,
+                    text="@WorkBot unknown time",
+                    timestamp=None,
+                )
+            ]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        stats = module.poll_once(
+            FakeAdapter(),
+            settings,
+            db,
+            limit=20,
+            dry_run=False,
+            since=datetime(2026, 6, 19, 10, 0, tzinfo=timezone.utc),
+        )
+
+    assert stats.fetched_count == 1
+    assert stats.imported_count == 0
+    assert stats.new_messages == []
+    assert stats.command_count == 0
+
+
+def test_wechat_poller_only_processes_commands_imported_this_cycle() -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="ordinary chat")]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        module.MessageStore(db).import_messages(
+            [module.ChatMessageCreate(platform="personal_wechat", room_id="dev-group", text="@WorkBot old backlog")]
+        )
+        stats = module.poll_once(FakeAdapter(), settings, db, limit=20, dry_run=False)
+
+    assert stats.imported_count == 1
+    assert len(stats.new_messages) == 1
+    assert stats.command_count == 0
+
+
+def test_wechat_poller_writes_agent_prompt_drafts_for_new_workbot_messages(tmp_path: Path) -> None:
+    module = _load_poller_module()
+
+    class FakeAdapter:
+        def fetch_recent(self, room_id: str, limit: int):
+            return [
+                module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="ordinary chat"),
+                module.ChatMessageCreate(platform="personal_wechat", room_id=room_id, text="@WorkBot fix settings"),
+            ]
+
+    settings = get_settings().model_copy(update={"wechat_whitelist_rooms": ("dev-group",)})
+    with SessionLocal() as db:
+        stats = module.poll_once(
+            FakeAdapter(),
+            settings,
+            db,
+            limit=20,
+            dry_run=False,
+            show_new=True,
+            prompt_dir=tmp_path,
+        )
+
+    assert len(stats.new_messages) == 2
+    assert len(stats.prompt_paths) == 1
+    prompt_path = Path(stats.prompt_paths[0])
+    assert prompt_path.exists()
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "@WorkBot fix settings" in prompt
+    assert "dev-group" in prompt
+    assert "不要直接运行 Agent" in prompt
+
+
+def test_wechat_poller_parse_args_accepts_since_show_new_and_prompt_dir() -> None:
+    module = _load_poller_module()
+
+    args = module.parse_args(
+        [
+            "--since",
+            "2026-06-19 10:30",
+            "--show-new",
+            "--write-agent-prompts",
+            ".agent-work/prompts",
+        ]
+    )
+
+    assert args.since == datetime(2026, 6, 19, 10, 30, tzinfo=timezone.utc)
+    assert args.show_new is True
+    assert args.prompt_dir == Path(".agent-work/prompts")
 
 
 def _load_poller_module():

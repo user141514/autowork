@@ -189,10 +189,23 @@ Run the local polling script continuously:
 set AGENT_WORKFLOW_PERSONAL_WECHAT_ENABLED=true
 set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
 set AGENT_WORKFLOW_WECHAT_READ_LIMIT=50
-python scripts\poll_wechat_messages.py --interval 30
+python scripts\poll_wechat_messages.py --interval 30 --show-new
 ```
 
 The poller reads only whitelisted groups, saves messages as `ChatMessage`, deduplicates through `MessageStore`, and records new `@WorkBot` commands as `BotCommandLog`. It does not create WorkDocs, run agents, or touch Git.
+
+Start monitoring from a specific time and write prompt drafts for newly imported `@WorkBot` messages:
+
+```bash
+python scripts\poll_wechat_messages.py ^
+  --interval 30 ^
+  --since "2026-06-19 10:30" ^
+  --show-new ^
+  --write-agent-prompts .agent-work\prompts
+```
+
+Prompt drafts are local markdown files for review. They are not executed automatically and do not bypass the WorkDoc approval chain.
+When `--since` is active, messages without timestamps are skipped because the poller cannot prove they are inside the requested window. Command processing is scoped to messages newly imported in the current poll cycle, so old unprocessed backlog is not mixed into the current run summary.
 
 Poll a whitelisted group:
 
