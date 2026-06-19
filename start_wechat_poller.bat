@@ -64,6 +64,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+for /f "usebackq delims=" %%P in (`%PYTHON_EXE% -c "import sys; print(sys.executable)"`) do set "PYTHON_PATH=%%P"
+echo Python executable: %PYTHON_PATH%
+echo [%DATE% %TIME%] Python executable: %PYTHON_PATH% >> "%LOG_FILE%"
 
 echo.
 echo Checking backend dependencies...
@@ -84,30 +87,30 @@ if errorlevel 1 (
 )
 
 echo.
-echo Checking wxauto...
-%PYTHON_EXE% -c "import wxauto" >nul 2>nul
+echo Checking wxauto/wxautox...
+%PYTHON_EXE% -c "import importlib.util, sys; sys.exit(0 if (importlib.util.find_spec('wxauto') or importlib.util.find_spec('wxautox')) else 1)" >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo wxauto is not installed. Installing wxauto...
-  echo [%DATE% %TIME%] Installing wxauto >> "%LOG_FILE%"
-  %PYTHON_EXE% -m pip install wxauto
+  echo wxauto/wxautox is not installed. Installing wxautox...
+  echo [%DATE% %TIME%] Installing wxautox >> "%LOG_FILE%"
+  %PYTHON_EXE% -m pip install wxautox >> "%LOG_FILE%" 2>&1
   if errorlevel 1 (
     echo.
-    echo [ERROR] wxauto installation failed.
+    echo [ERROR] wxautox installation failed.
     echo         You can install it manually:
-    echo         %PYTHON_EXE% -m pip install wxauto
+    echo         %PYTHON_EXE% -m pip install wxautox
     echo         Log: %LOG_FILE%
-    echo [%DATE% %TIME%] wxauto installation failed >> "%LOG_FILE%"
+    echo [%DATE% %TIME%] wxautox installation failed >> "%LOG_FILE%"
     echo.
     pause
     exit /b 1
   )
-  %PYTHON_EXE% -c "import wxauto" >nul 2>nul
+  %PYTHON_EXE% -c "import importlib.util, sys; sys.exit(0 if (importlib.util.find_spec('wxauto') or importlib.util.find_spec('wxautox')) else 1)" >nul 2>nul
   if errorlevel 1 (
     echo.
-    echo [ERROR] wxauto was installed but still cannot be imported.
+    echo [ERROR] wxautox was installed but still cannot be imported.
     echo         Log: %LOG_FILE%
-    echo [%DATE% %TIME%] wxauto import still failed >> "%LOG_FILE%"
+    echo [%DATE% %TIME%] wxautox import still failed >> "%LOG_FILE%"
     echo.
     pause
     exit /b 1

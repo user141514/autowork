@@ -169,10 +169,10 @@ Supported WorkBot commands:
 - `@WorkBot 确认执行 WD-1`
 - `@WorkBot 报告 WD-1`
 
-Install `wxauto` only on a Windows host that already has WeChat Desktop open and logged in:
+Install `wxautox` only on a Windows host that already has WeChat Desktop open and logged in. The adapter also supports environments that provide the older `wxauto` module name:
 
 ```bash
-python -m pip install wxauto
+python -m pip install wxautox
 ```
 
 Run the local polling script once in dry-run mode:
@@ -183,7 +183,7 @@ set AGENT_WORKFLOW_ALLOWED_WECHAT_ROOMS=dev-group
 python scripts\poll_wechat_messages.py --once --dry-run
 ```
 
-On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`. The launcher will try to install `wxauto` automatically if it is missing.
+On Windows, you can also double-click `F:\autowork\start_wechat_poller.bat`. It asks for the whitelisted group name, starts monitoring from the current time, prints newly imported messages, and writes prompt drafts under `.agent-work\prompts`. The launcher prints the Python executable it is using and will try to install `wxautox` automatically if neither `wxauto` nor `wxautox` is available.
 
 For WeChat groups that use default member names as the chat title, the wxauto adapter supports simple substring matching against the current session list. For example, entering `Bob` can match `Alice, Bob, Carol`. The Windows launcher prompts you to choose when multiple sessions match; direct API/script calls still reject ambiguous matches as a safety fallback.
 

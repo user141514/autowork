@@ -68,8 +68,11 @@ class WxautoAdapter(ChatAdapter):
             return self._wechat
         try:
             from wxauto import WeChat
-        except ImportError as exc:
-            raise RuntimeError("wxauto is not installed. Install it only on Windows hosts with WeChat Desktop.") from exc
+        except ImportError:
+            try:
+                from wxautox import WeChat
+            except ImportError as exc:
+                raise RuntimeError("wxauto/wxautox is not installed. Install wxautox only on Windows hosts with WeChat Desktop.") from exc
         self._wechat = WeChat()
         return self._wechat
 
