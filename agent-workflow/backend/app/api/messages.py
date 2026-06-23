@@ -11,6 +11,14 @@ from app.services.message_store import MessageStore
 
 
 router = APIRouter(prefix="/messages", tags=["messages"])
+MAX_MESSAGE_API_LIMIT = 200
+DEFAULT_MESSAGE_API_LIMIT = 50
+
+
+def _safe_limit(limit: int | None) -> int:
+    if limit is None:
+        return DEFAULT_MESSAGE_API_LIMIT
+    return max(1, min(int(limit), MAX_MESSAGE_API_LIMIT))
 
 
 @router.post("/import", response_model=list[ChatMessageRead])
@@ -31,7 +39,7 @@ def list_messages(
         room_id=room_id,
         start_time=start_time,
         end_time=end_time,
-        limit=limit,
+        limit=_safe_limit(limit),
         order=order,
     )
 
@@ -43,7 +51,23 @@ def latest_messages(
     limit: int | None = None,
     db: Session = Depends(get_db),
 ):
-    return MessageStore(db).list_messages_since_cursor(room_id=room_id, since_cursor=since_cursor, limit=limit)
+    return MessageStore(db).list_messages_since_cursor(room_id=room_id, since_cursor=since_cursor, limit=_safe_limit(limit))
+
+
+@router.get("/page", response_model=list[ChatMessageRead])
+def page_messages(
+    room_id: str,
+    before_id: int | None = None,
+    after_id: int | None = None,
+    limit: int | None = None,
+    db: Session = Depends(get_db),
+):
+    return MessageStore(db).list_messages_page(
+        room_id=room_id,
+        before_id=before_id,
+        after_id=after_id,
+        limit=_safe_limit(limit),
+    )
 
 
 @router.get("/agent-input", response_class=PlainTextResponse)
@@ -59,7 +83,7 @@ def agent_input(
         room_id=room_id,
         start_time=start_time,
         end_time=end_time,
-        limit=limit,
+        limit=_safe_limit(limit),
         order=order,
     )
     return build_agent_input(messages)

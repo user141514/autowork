@@ -32,6 +32,7 @@ The backend does not let an Agent read raw chat logs and modify code directly. C
 - Phase 9 Personal WeChat intake through Windows WeChat Desktop UIAutomation / wxauto
 - Windows-local WeChat polling script for whitelisted groups
 - Segment and TaskCandidate pipeline before WorkDoc for personal WeChat messages
+- Demand Radar batch extractor for noisy chat messages
 - Manual chat export import for `.txt`, `.json`, `.csv`, `.md`
 - Local WeChat database import stub that intentionally does not bypass encryption or reverse engineer databases
 
@@ -97,6 +98,7 @@ Dangerous operations are off by default.
 
 - `POST /messages/import`
 - `GET /messages`
+- `GET /messages/page`
 - `POST /segments/from-messages`
 - `POST /segments/from-command/{message_id}`
 - `GET /segments`
@@ -142,6 +144,157 @@ Dangerous operations are off by default.
 - `POST /chat-feedback/workdoc/{id}`
 - `POST /chat-feedback/agent-run/{id}`
 - `POST /chat-feedback/report/{workdoc_id}`
+- `POST /demand-radar/extract`
+- `POST /demand-radar/extract-llm`
+- `POST /message-documents/from-demand-messages`
+- `GET /demand-radar/demo`
+- `POST /requirement-promotion/promote`
+- `GET /review-workbench`
+- `GET /wechat-directory/conversations`
+- `GET /wechat-directory/messages`
+
+## WeChat Directory and Safe Paging
+
+The review workbench now resolves WeChat internal IDs into selectable conversations before reading messages.
+
+- `GET /wechat-directory/conversations?kind=chatroom&query=项目&limit=100` lists chatrooms with display names, raw IDs, message counts, latest time, and preview text.
+- `GET /wechat-directory/conversations?kind=contact&query=张三&limit=100` lists contacts.
+- `GET /wechat-directory/messages?conversation_id=<raw_id>&limit=50` pages one selected conversation only.
+
+Safety rules:
+
+- The workbench no longer scans all decrypted chats when no conversation is selected.
+- Message APIs cap single-request limits to prevent browser and SQLite stalls.
+- Demand extraction should run on the selected conversation window, not the whole message database.
+
+One-click launcher for this flow:
+
+```bat
+F:\autowork\start_wechat_review_workbench.bat
+```
+
+## Phase 10 Requirement Review Workbench
+
+Phase 10 freezes the product path between noisy group chat and autonomous execution:
+
+```text
+ChatMessage / DemandMessage
+  -> DemandRadar
+  -> CandidateRequirement
+  -> HumanReviewDecision
+  -> WorkDocDraft
+  -> AgentInputPack
+  -> existing WorkDoc / AgentRun execution chain
+```
+
+Open the review workbench:
+
+```text
+http://127.0.0.1:8000/review-workbench
+```
+
+One-click Windows launcher from the repository root:
+
+```bat
+F:\autowork\start_review_workbench.bat
+```
+
+The launcher checks Python/dependencies, auto-selects an available port, starts Uvicorn, and opens `/review-workbench` in the browser.
+
+The workbench demonstrates candidate extraction and human-reviewed promotion. It does not create AgentRuns or touch Git. Its output is a WorkDoc draft, AgentInputPack, and agent brief markdown for review.
+
+Phase 10 docs:
+
+- `../docs/phase10_requirement_review_workbench.md`
+- `../docs/phase10_acceptance_criteria.md`
+
+## Message-to-Document Pipeline
+
+Phase 12 stabilizes the deliverable between raw chat and WorkDoc execution:
+
+```text
+DemandMessage batch
+  -> extractor: local or llm
+  -> CandidateRequirement list
+  -> review-document markdown
+  -> later human confirmation / WorkDoc promotion
+```
+
+Create a review document:
+
+```bash
+curl -X POST http://127.0.0.1:8000/message-documents/from-demand-messages ^
+  -H "Content-Type: application/json" ^
+  -d "{\"extractor\":\"local\",\"writeDocument\":false,\"messages\":[{\"id\":\"m-1\",\"chatId\":\"dev-room\",\"chatName\":\"开发群\",\"sender\":\"PM\",\"timestamp\":\"2026-06-20T10:00:00+08:00\",\"text\":\"设置页保存接口 500，页面一直转圈\",\"msgType\":\"text\",\"source\":\"manual\"}]}"
+```
+
+The generated markdown is review-only. It does not run agents, approve WorkDocs, or touch Git.
+
+Design doc:
+
+- `../docs/phase12_message_to_document_pipeline.md`
+
+## Demand Radar
+
+Demand Radar is the first step between raw group chat and the WorkDoc execution chain. It does not create WorkDocs, run agents, or touch Git. It takes a mixed batch of chat messages and returns reviewable candidate requirement cards.
+
+There are two extraction modes:
+
+- `POST /demand-radar/extract`: local rule-based extractor, deterministic and offline.
+- `POST /demand-radar/extract-llm`: LLM-backed extractor using an OpenAI-compatible chat-completions API.
+
+Local LLM config:
+
+```text
+app/mykey.py              # local-only, gitignored
+app/mykey.example.py      # tracked example
+```
+
+Copy `app/mykey.example.py` to `app/mykey.py`, then fill:
+
+```python
+LLM_SETTINGS = {
+    "provider": "openai_compatible",
+    "base_url": "https://api.deepseek.com",
+    "api_key": "PASTE_YOUR_KEY_HERE",
+    "model": "deepseek-chat",
+    "timeout_seconds": 60,
+    "temperature": 0.1,
+    "max_tokens": 4096,
+}
+```
+
+You can also override through environment variables:
+
+```text
+AGENT_WORKFLOW_LLM_BASE_URL
+AGENT_WORKFLOW_LLM_API_KEY
+AGENT_WORKFLOW_LLM_MODEL
+AGENT_WORKFLOW_LLM_TIMEOUT_SECONDS
+AGENT_WORKFLOW_LLM_TEMPERATURE
+AGENT_WORKFLOW_LLM_MAX_TOKENS
+```
+
+Goal for this stage:
+
+- Input about 100 mixed group-chat messages.
+- Output a small set of candidate requirements.
+- Each candidate includes evidence messages, facts, inferences, missing fields, confidence, and status.
+- A human should be able to quickly decide: confirm, ignore, merge, or supplement.
+
+Extract candidates:
+
+```bash
+curl -X POST http://127.0.0.1:8000/demand-radar/extract ^
+  -H "Content-Type: application/json" ^
+  -d "{\"messages\":[{\"id\":\"m-1\",\"chatId\":\"项目群A\",\"chatName\":\"项目群A\",\"sender\":\"PM\",\"timestamp\":\"2026-06-19T10:00:00+08:00\",\"text\":\"看板页需要加一个按负责人筛选，验收是选人后列表只显示对应任务\",\"msgType\":\"text\",\"source\":\"manual\"}]}"
+```
+
+Candidate statuses:
+
+- `pending_review`: likely actionable, but still needs a human decision.
+- `suspect`: weak signal retained for review, usually missing target object or context.
+- `expired`: the nearby conversation says the issue was cancelled or already resolved.
 
 ## Phase 9 Personal WeChat Intake
 

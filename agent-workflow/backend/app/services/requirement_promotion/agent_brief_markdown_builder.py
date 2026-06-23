@@ -1,0 +1,71 @@
+from app.schemas.requirement_promotion import AgentInputPack, WorkDocDraft
+
+
+class AgentBriefMarkdownBuilder:
+    def build(self, workdoc: WorkDocDraft, pack: AgentInputPack) -> str:
+        return "\n".join(
+            [
+                f"# {workdoc.title}",
+                "",
+                "## Task",
+                pack.task.objective,
+                "",
+                "## Target Project",
+                f"- Project/Repo: {pack.target.project_or_repo}",
+                f"- Working Dir: {pack.target.working_dir or 'not specified'}",
+                f"- Branch: {pack.target.branch or 'not specified'}",
+                "",
+                "## Requirement Type",
+                workdoc.type,
+                "",
+                "## Background",
+                workdoc.background,
+                "",
+                "## Problem / Request",
+                workdoc.problem_statement,
+                "",
+                "## Actual Behavior",
+                pack.task.actual_behavior or "not specified",
+                "",
+                "## Expected Behavior",
+                pack.task.expected_behavior or pack.task.desired_behavior or "not specified",
+                "",
+                "## Evidence From Chat",
+                *_bullets([f"{item.message_id} | {item.sender or 'unknown'} | {item.text}" for item in pack.evidence]),
+                "",
+                "## Confirmed Facts",
+                *_bullets([f"{item.fact} (source: {', '.join(item.source_message_ids)})" for item in workdoc.facts]),
+                "",
+                "## Assumptions",
+                *_bullets(workdoc.assumptions or ["None"]),
+                "",
+                "## Constraints",
+                *_bullets(pack.task.constraints),
+                "",
+                "## Out of Scope",
+                *_bullets(pack.task.out_of_scope or ["None"]),
+                "",
+                "## Acceptance Criteria",
+                *_bullets(pack.task.acceptance_criteria),
+                "",
+                "## Execution Policy",
+                f"- Require plan before edit: {pack.execution_policy.require_plan_before_edit}",
+                f"- Allow code edit: {pack.execution_policy.allow_code_edit}",
+                f"- Allow test run: {pack.execution_policy.allow_test_run}",
+                f"- Allow git commit: {pack.execution_policy.allow_git_commit}",
+                f"- Allow push: {pack.execution_policy.allow_push}",
+                *_bullets(pack.execution_policy.forbidden_actions),
+                "",
+                "## Required Output",
+                f"- Summary: {pack.output_contract.require_summary}",
+                f"- Changed files: {pack.output_contract.require_changed_files}",
+                f"- Tests: {pack.output_contract.require_tests}",
+                f"- Open questions: {pack.output_contract.require_open_questions}",
+                f"- Diff: {pack.output_contract.require_diff}",
+                "",
+            ]
+        )
+
+
+def _bullets(items: list[str]) -> list[str]:
+    return [f"- {item}" for item in items]

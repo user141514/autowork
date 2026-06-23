@@ -17,4 +17,9 @@ logs/
 *.sqlite3
 
 .agent-work/
+.devspace-run/
 .superpowers/
+external_tools/
+
+# Local LLM/API credentials. Never commit real keys.
+agent-workflow/backend/app/mykey.py
